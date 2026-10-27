@@ -1,0 +1,7 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "instructions": [
+    "docs/00-regras-inegociaveis.md",
+    "docs/decisoes-fechadas.md"
+  ]
+}
