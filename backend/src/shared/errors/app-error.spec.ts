@@ -3,7 +3,12 @@ import { AppError } from './app-error.js';
 
 describe('AppError', () => {
   it('deve criar um erro com código, statusCode, mensagem e traceId', () => {
-    const error = new AppError('AUTHZ_DENIED', 'Acesso negado', 403, 'trace-123');
+    const error = new AppError(
+      'AUTHZ_DENIED',
+      'Acesso negado',
+      403,
+      'trace-123',
+    );
 
     expect(error.code).toBe('AUTHZ_DENIED');
     expect(error.statusCode).toBe(403);

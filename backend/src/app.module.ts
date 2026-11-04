@@ -20,7 +20,10 @@ export const { ObserveModule, ObserveInstrument } = createObserveModule();
     AuditModule,
   ],
   controllers: [AppController, HealthController],
-  providers: [AppService, { provide: APP_FILTER, useClass: HttpExceptionFilter }],
+  providers: [
+    AppService,
+    { provide: APP_FILTER, useClass: HttpExceptionFilter },
+  ],
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {

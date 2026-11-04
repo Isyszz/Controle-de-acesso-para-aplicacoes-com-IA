@@ -68,12 +68,16 @@ describe('TraceMiddleware (integração HTTP)', () => {
     const traceIds: string[] = [];
 
     await Promise.all([
-      request(app.getHttpServer()).get('/health').then((res) => {
-        traceIds.push(res.headers['x-trace-id']);
-      }),
-      request(app.getHttpServer()).get('/health').then((res) => {
-        traceIds.push(res.headers['x-trace-id']);
-      }),
+      request(app.getHttpServer())
+        .get('/health')
+        .then((res) => {
+          traceIds.push(res.headers['x-trace-id']);
+        }),
+      request(app.getHttpServer())
+        .get('/health')
+        .then((res) => {
+          traceIds.push(res.headers['x-trace-id']);
+        }),
     ]);
 
     expect(traceIds[0]).toBeDefined();

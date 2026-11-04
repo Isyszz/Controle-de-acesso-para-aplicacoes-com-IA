@@ -40,6 +40,7 @@ export interface AuditEvent {
 
 export interface AuditServicePort {
   record(input: AuditEventInput): Promise<void>;
-  findByTraceId(traceId: string): AuditEvent[];
-  findAll(): AuditEvent[];
+  findByTraceIdAsync(traceId: string): Promise<AuditEvent[]>;
+  findAllAsync(): Promise<AuditEvent[]>;
+  getDecisionStats(): Promise<Record<AuditDecision, number>>;
 }
