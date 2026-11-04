@@ -2,17 +2,6 @@ import { Pool } from 'pg';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import * as schema from './schema.js';
 
-/**
- * Módulo de persistência — Stage B.
- *
- * Fornece uma única instância do cliente Drizzle (singleton) compartilhada
- * por todos os módulos do backend, evitando conexões independentes e
- * não controladas com o PostgreSQL.
- *
- * A URL de conexão vem de DATABASE_URL (ou DATABASE_URL_TEST quando
- * NODE_ENV=test), lida via dotenv no ponto de entrada da aplicação.
- */
-
 let _db: ReturnType<typeof drizzle> | null = null;
 
 export function getDb(databaseUrl?: string) {

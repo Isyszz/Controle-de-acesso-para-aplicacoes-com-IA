@@ -51,7 +51,7 @@ describe('HttpExceptionFilter - erro inesperado (HTTP 500)', () => {
     expect(response.body.error.traceId).toBeDefined();
     expect(typeof response.body.error.traceId).toBe('string');
     expect(response.body.error.traceId.length).toBeGreaterThan(0);
-    // Não deve expor stack trace ou detalhes internos
+
     expect(response.body.error.stack).toBeUndefined();
     expect(response.body.error.details).toBeUndefined();
   });

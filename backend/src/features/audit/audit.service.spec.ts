@@ -111,9 +111,7 @@ integrationTests('AuditService (integração - requer DATABASE_URL_TEST)', () =>
       await db
         .delete(auditEvents)
         .where(eq(auditEvents.traceId, TEST_TRACE_ID));
-    } catch {
-      // Banco pode não estar disponível
-    }
+    } catch {}
     resetDb();
   });
 

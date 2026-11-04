@@ -98,7 +98,6 @@ export class AuditService implements AuditServicePort {
       metadata: event.metadata ? JSON.stringify(event.metadata) : null,
     });
 
-    // Aplica cap de eventos em memória do banco (remove os mais antigos se exceder)
     const all = await db
       .select()
       .from(auditEvents)
@@ -156,5 +155,4 @@ export class AuditService implements AuditServicePort {
   }
 }
 
-// Exporta utilitários para testes controlarem o singleton
 export { resetDb };

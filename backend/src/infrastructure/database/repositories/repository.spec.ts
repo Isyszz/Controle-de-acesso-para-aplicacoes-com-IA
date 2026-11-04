@@ -79,7 +79,6 @@ integrationTests('Repositórios (integração - requer DATABASE_URL_TEST)', () =
     expect(found?.name).toBe('Repo Test User');
     expect(found?.status).toBe('active');
 
-    // Limpeza específica do registro criado (respeita FKs)
     await db.delete(users).where(eq(users.id, created.id));
   });
 
@@ -108,7 +107,6 @@ integrationTests('Repositórios (integração - requer DATABASE_URL_TEST)', () =
     expect(found?.passwordHash).toBe(created.passwordHash);
     expect(found?.failedLoginAttempts).toBe(0);
 
-    // Limpeza específica: credencial antes do usuário (ordem de FK)
     await db.delete(userCredentials).where(eq(userCredentials.id, created.id));
     await db.delete(users).where(eq(users.id, user.id));
   });
@@ -138,7 +136,6 @@ integrationTests('Repositórios (integração - requer DATABASE_URL_TEST)', () =
     expect(found).not.toBeNull();
     expect(found?.userId).toBe(user.id);
 
-    // Limpeza específica: sessão antes do usuário (ordem de FK)
     await db.delete(userTokens).where(eq(userTokens.id, created.id));
     await db.delete(users).where(eq(users.id, user.id));
   });
@@ -160,7 +157,6 @@ integrationTests('Repositórios (integração - requer DATABASE_URL_TEST)', () =
     expect(found?.id).toBe(created.id);
     expect(found?.name).toBe('Papel de Teste Repo');
 
-    // Limpeza específica do registro criado
     await db.delete(roles).where(eq(roles.id, created.id));
   });
 
@@ -180,7 +176,6 @@ integrationTests('Repositórios (integração - requer DATABASE_URL_TEST)', () =
     expect(found).not.toBeNull();
     expect(found?.id).toBe(created.id);
 
-    // Limpeza específica do registro criado
     await db.delete(permissions).where(eq(permissions.id, created.id));
   });
 
@@ -216,7 +211,6 @@ integrationTests('Repositórios (integração - requer DATABASE_URL_TEST)', () =
     const byUser = await userRoleRepo.findByUserId(user.id);
     expect(byUser.length).toBeGreaterThanOrEqual(1);
 
-    // Limpeza específica: associação antes de usuário e papel (ordem de FK)
     await db.delete(userRoles).where(eq(userRoles.id, created.id));
     await db.delete(users).where(eq(users.id, user.id));
     await db.delete(roles).where(eq(roles.id, role.id));
@@ -253,7 +247,6 @@ integrationTests('Repositórios (integração - requer DATABASE_URL_TEST)', () =
     const permIds = await rolePermRepo.findPermissionsByRoleId(role.id);
     expect(permIds).toContain(permission.id);
 
-    // Limpeza específica: associação antes de papel e permissão (ordem de FK)
     await db.delete(rolePermissions).where(eq(rolePermissions.id, created.id));
     await db.delete(roles).where(eq(roles.id, role.id));
     await db.delete(permissions).where(eq(permissions.id, permission.id));
