@@ -11,7 +11,12 @@ describe('AppLogger', () => {
     const logger = new AppLogger('TestLogger');
     const loggerLogSpy = vi.spyOn(Logger.prototype, 'log');
 
-    logger.log({ password: 'secret123', token: 'abc-token', user: 'john', csrf: 'xyz' });
+    logger.log({
+      password: 'secret123',
+      token: 'abc-token',
+      user: 'john',
+      csrf: 'xyz',
+    });
 
     expect(loggerLogSpy).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -84,7 +89,10 @@ describe('AppLogger', () => {
     logger.log('Simple string message');
 
     expect(loggerLogSpy).toHaveBeenCalledTimes(1);
-    expect(loggerLogSpy).toHaveBeenCalledWith('Simple string message', 'TestLogger');
+    expect(loggerLogSpy).toHaveBeenCalledWith(
+      'Simple string message',
+      'TestLogger',
+    );
   });
 
   it('deve registrar aviso apenas uma vez com campos sensíveis redigidos', () => {

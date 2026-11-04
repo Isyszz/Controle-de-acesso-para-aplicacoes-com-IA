@@ -27,7 +27,11 @@ describe('HttpExceptionFilter - erro inesperado (HTTP 500)', () => {
 
     app = moduleFixture.createNestApplication();
     app.use((req, res, next) => {
-      new TraceMiddleware().use(req as unknown as Request, res as unknown as Response, next);
+      new TraceMiddleware().use(
+        req as unknown as Request,
+        res as unknown as Response,
+        next,
+      );
     });
     await app.init();
   });

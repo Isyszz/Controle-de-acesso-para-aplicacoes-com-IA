@@ -10,16 +10,17 @@
     "build": "nest build",
     "deploy": "nest deploy",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
+    "format:stage-a": "prettier --write src/app.module.ts src/features/audit/audit.module.ts src/features/audit/audit.service.spec.ts src/features/audit/audit.service.ts src/features/audit/audit.types.ts src/features/audit/health.controller.spec.ts src/features/audit/health.controller.ts src/shared/errors/app-error.spec.ts src/shared/errors/app-error.ts src/shared/errors/http-exception.filter.ts src/shared/errors/sensitive-fields.spec.ts src/shared/errors/sensitive-fields.ts src/shared/logging/logger.service.spec.ts src/shared/logging/logger.service.ts src/shared/trace/trace.context.spec.ts src/shared/trace/trace.context.ts src/shared/trace/trace.middleware.ts test/http/exception-filter.spec.ts test/http/internal-error.spec.ts test/http/trace-middleware.spec.ts",
     "start": "nest start --env-file .env",
     "start:dev": "nest start --watch --env-file .env",
     "start:debug": "nest start --debug --watch --env-file .env",
     "start:prod": "node dist/main",
     "lint": "oxlint --type-aware src/ test/",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "test:cov": "vitest run --coverage",
-    "test:debug": "vitest --inspect-brk --no-file-parallelism",
-    "test:e2e": "vitest run --config ./vitest.config.e2e.ts"
+    "test": "NODE_ENV=test vitest run",
+    "test:watch": "NODE_ENV=test vitest",
+    "test:cov": "NODE_ENV=test vitest run --coverage",
+    "test:debug": "NODE_ENV=test vitest --inspect-brk --no-file-parallelism",
+    "test:e2e": "NODE_ENV=test vitest run --config ./vitest.config.e2e.ts"
   },
   "dependencies": {
     "@langchain/core": "^1.3.0",

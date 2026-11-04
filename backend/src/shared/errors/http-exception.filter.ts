@@ -37,7 +37,10 @@ export class HttpExceptionFilter implements ExceptionFilter {
     const response = ctx.getResponse();
     const request = ctx.getRequest();
 
-    const traceId = getTraceId() || (request.headers['x-trace-id'] as string) || crypto.randomUUID();
+    const traceId =
+      getTraceId() ||
+      (request.headers['x-trace-id'] as string) ||
+      crypto.randomUUID();
 
     let code = 'INTERNAL_ERROR';
     let message = 'Erro interno do servidor.';
