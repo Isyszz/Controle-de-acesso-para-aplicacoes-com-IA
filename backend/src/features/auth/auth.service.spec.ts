@@ -3,11 +3,11 @@ import { AuthService } from './auth.service.js';
 import { AppError } from '../../shared/errors/app-error.js';
 import { AuditService } from '../../features/audit/audit.service.js';
 
+const dbUrl = process.env.DATABASE_URL_TEST;
+
 const mockAuditService = {
   record: async () => {},
 } as unknown as AuditService;
-
-const dbUrl = process.env.DATABASE_URL;
 
 describe('AuthService (unitário)', () => {
   let service: AuthService;
@@ -30,16 +30,19 @@ describe('AuthService (unitário)', () => {
 
 const integrationTests = dbUrl ? describe : describe.skip;
 
-integrationTests('AuthService (integração - requer DATABASE_URL)', () => {
-  let service: AuthService;
+integrationTests(
+  'AuthService.login (integração - requer DATABASE_URL_TEST)',
+  () => {
+    let service: AuthService;
 
-  beforeEach(() => {
-    service = new AuthService(mockAuditService);
-  });
+    beforeEach(() => {
+      service = new AuthService(mockAuditService);
+    });
 
-  it('deve rejeitar login com credenciais inválidas', async () => {
-    await expect(
-      service.login({ email: 'inexistente@exemplo', password: 'senha123' }),
-    ).rejects.toThrow(AppError);
-  });
-});
+    it('deve rejeitar login com credenciais inválidas', async () => {
+      await expect(
+        service.login({ email: 'inexistente@exemplo', password: 'senha123' }),
+      ).rejects.toThrow(AppError);
+    });
+  },
+);

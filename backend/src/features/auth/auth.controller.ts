@@ -20,11 +20,14 @@ const LoginSchema = z.object({
 
 const SESSION_COOKIE_NAME = process.env.SESSION_COOKIE_NAME ?? 'session';
 const CSRF_SECRET_ENV = process.env.CSRF_SECRET;
-const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN;
 if (!CSRF_SECRET_ENV) {
   throw new Error('CSRF_SECRET não definida. Configure o arquivo .env.');
 }
 const CSRF_SECRET: string = CSRF_SECRET_ENV;
+
+function getFrontendOrigin(): string | undefined {
+  return process.env.FRONTEND_ORIGIN;
+}
 
 function computeCsrfToken(sessionId: string): string {
   return createHmac('sha256', CSRF_SECRET).update(sessionId).digest('hex');
@@ -42,10 +45,11 @@ function validateCsrfToken(
 }
 
 function validateOrigin(origin: string | undefined): boolean {
-  if (!FRONTEND_ORIGIN) {
+  const frontendOrigin = getFrontendOrigin();
+  if (!frontendOrigin) {
     return true;
   }
-  return origin === FRONTEND_ORIGIN;
+  return origin === frontendOrigin;
 }
 
 @Controller('auth')

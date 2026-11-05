@@ -272,7 +272,8 @@ export class AuthService {
     const [credential] = await tx
       .select()
       .from(userCredentials)
-      .where(eq(userCredentials.userId, userId));
+      .where(eq(userCredentials.userId, userId))
+      .for('update');
 
     if (!credential) {
       return;
