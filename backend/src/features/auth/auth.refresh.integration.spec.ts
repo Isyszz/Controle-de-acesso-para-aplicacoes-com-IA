@@ -3,8 +3,14 @@ import { AuthService } from './auth.service.js';
 import { AppError } from '../../shared/errors/app-error.js';
 import { AuditService } from '../../features/audit/audit.service.js';
 import { getDb } from '../../infrastructure/database/index.js';
-import { users, userTokens } from '../../infrastructure/database/schema.js';
-import { eq } from 'drizzle-orm';
+import {
+  users,
+  userTokens,
+  userCredentials,
+  auditEvents,
+} from '../../infrastructure/database/schema.js';
+import { eq, or } from 'drizzle-orm';
+import { hash } from 'argon2';
 
 const dbUrl = process.env.DATABASE_URL_TEST;
 
@@ -18,10 +24,23 @@ integrationTests(
     beforeEach(async () => {
       service = new AuthService(new AuditService());
       const db = getDb(dbUrl);
-      await db.delete(userTokens).where(eq(userTokens.userId, users.id));
-      await db.delete(users).where(eq(users.email, 'refresh.test@exemplo'));
-      await db.delete(users).where(eq(users.email, 'refresh.expired@exemplo'));
-      await db.delete(users).where(eq(users.email, 'refresh.limit@exemplo'));
+      const testUsers = await db
+        .select({ id: users.id })
+        .from(users)
+        .where(
+          or(
+            eq(users.email, 'refresh.test@exemplo'),
+            eq(users.email, 'refresh.expired@exemplo'),
+            eq(users.email, 'refresh.limit@exemplo'),
+            eq(users.email, 'refresh.valid@exemplo'),
+          )
+        );
+      for (const user of testUsers) {
+        await db.delete(userCredentials).where(eq(userCredentials.userId, user.id));
+        await db.delete(userTokens).where(eq(userTokens.userId, user.id));
+        await db.delete(auditEvents).where(eq(auditEvents.actorUserId, user.id));
+        await db.delete(users).where(eq(users.id, user.id));
+      }
     });
 
     it('deve rejeitar refresh de sessão inexistente (C-09)', async () => {
@@ -108,6 +127,53 @@ integrationTests(
       await expect(service.refresh('sessao-limite-refresh')).rejects.toThrow(
         AppError,
       );
+    });
+
+    it('deve renovar sessão com rotação de segredo (C-09)', async () => {
+      const db = getDb(dbUrl);
+      const [user] = await db
+        .insert(users)
+        .values({
+          email: 'refresh.valid@exemplo',
+          name: 'Refresh Valid User',
+          status: 'active',
+        })
+        .returning();
+
+      const senhaCorreta = 'senha_refresh_123';
+      const senhaHash = await hash(senhaCorreta);
+
+      await db.insert(userCredentials).values({
+        userId: user.id,
+        passwordHash: senhaHash,
+        failedLoginAttempts: 0,
+        lockedUntil: null,
+      });
+
+      // Faz login para criar sessão
+      const loginResult = await service.login({
+        email: 'refresh.valid@exemplo',
+        password: senhaCorreta,
+      });
+
+      expect(loginResult.sessionSecret).toBeDefined();
+      expect(loginResult.sessionId).toBeDefined();
+
+      // Faz refresh com a sessão válida
+      const refreshed = await service.refresh(loginResult.sessionSecret);
+
+      expect(refreshed.sessionSecret).toBeDefined();
+      expect(refreshed.csrfToken).toBeDefined();
+      expect(refreshed.sessionSecret).not.toBe(loginResult.sessionSecret);
+
+      // Verifica que a sessão antiga foi revogada
+      const oldSession = await service.validateSession(loginResult.sessionSecret);
+      expect(oldSession).toBeNull();
+
+      // Verifica que a nova sessão está ativa
+      const newSession = await service.validateSession(refreshed.sessionSecret);
+      expect(newSession).toBeDefined();
+      expect(newSession.userId).toBe(user.id);
     });
   },
 );

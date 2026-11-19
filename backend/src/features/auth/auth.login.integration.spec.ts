@@ -1,13 +1,16 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { AuthService } from './auth.service.js';
+import { AppError } from '../../shared/errors/app-error.js';
 import { AuditService } from '../../features/audit/audit.service.js';
-import { hash } from 'argon2';
 import { getDb } from '../../infrastructure/database/index.js';
 import {
   users,
   userCredentials,
+  userTokens,
+  auditEvents,
 } from '../../infrastructure/database/schema.js';
-import { eq } from 'drizzle-orm';
+import { eq, or } from 'drizzle-orm';
+import { hash } from 'argon2';
 
 const dbUrl = process.env.DATABASE_URL_TEST;
 
@@ -21,12 +24,22 @@ integrationTests(
     beforeEach(async () => {
       service = new AuthService(new AuditService());
       const db = getDb(dbUrl);
-      await db
-        .delete(userCredentials)
-        .where(eq(userCredentials.userId, users.id));
-      await db.delete(users).where(eq(users.email, 'login.test@exemplo'));
-      await db.delete(users).where(eq(users.email, 'login.disabled@exemplo'));
-      await db.delete(users).where(eq(users.email, 'login.locked@exemplo'));
+      const testUsers = await db
+        .select({ id: users.id })
+        .from(users)
+        .where(
+          or(
+            eq(users.email, 'login.test@exemplo'),
+            eq(users.email, 'login.disabled@exemplo'),
+            eq(users.email, 'login.locked@exemplo')
+          )
+        );
+      for (const user of testUsers) {
+        await db.delete(userCredentials).where(eq(userCredentials.userId, user.id));
+        await db.delete(userTokens).where(eq(userTokens.userId, user.id));
+        await db.delete(auditEvents).where(eq(auditEvents.actorUserId, user.id));
+        await db.delete(users).where(eq(users.id, user.id));
+      }
     });
 
     it('deve criar sessão para credenciais válidas (C-01)', async () => {
@@ -111,7 +124,7 @@ integrationTests(
       });
     });
 
-    it('deve rejeitar conta desabilitada com erro genérico e auditar (C-04)', async () => {
+    it('deve rejeitar conta desabilitada com erro genérico (C-04)', async () => {
       const db = getDb(dbUrl);
       await db.delete(users).where(eq(users.email, 'login.disabled@exemplo'));
 
@@ -124,9 +137,11 @@ integrationTests(
         })
         .returning();
 
+      const disabledPasswordHash = await hash('qualquer');
+
       await db.insert(userCredentials).values({
         userId: disabledUser.id,
-        passwordHash: '$argon2id$v=19$m=65536,t=3,p=4$test$test',
+        passwordHash: disabledPasswordHash,
         failedLoginAttempts: 0,
         lockedUntil: null,
       });

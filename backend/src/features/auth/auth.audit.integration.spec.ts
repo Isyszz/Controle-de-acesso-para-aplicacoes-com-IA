@@ -2,8 +2,10 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { AuthService } from './auth.service.js';
 import { AuditService } from '../../features/audit/audit.service.js';
 import { getDb } from '../../infrastructure/database/index.js';
-import { auditEvents } from '../../infrastructure/database/schema.js';
-import { eq } from 'drizzle-orm';
+import { auditEvents, users, userTokens, userCredentials } from '../../infrastructure/database/schema.js';
+import { and, eq, or } from 'drizzle-orm';
+import { hash } from 'argon2';
+import { runWithTraceId } from '../../shared/trace/trace.context.js';
 
 const dbUrl = process.env.DATABASE_URL_TEST;
 
@@ -13,94 +15,176 @@ integrationTests(
   'AuthService.audit (integração - requer DATABASE_URL_TEST)',
   () => {
     let service: AuthService;
-    const recordedEvents: any[] = [];
 
     beforeEach(async () => {
-      service = new AuthService({
-        record: async (event: any) => {
-          recordedEvents.push(event);
-        },
-      } as unknown as AuditService);
+      service = new AuthService(new AuditService());
       const db = getDb(dbUrl);
-      await db
-        .delete(auditEvents)
-        .where(eq(auditEvents.eventType, 'auth.login.failed'));
-      await db
-        .delete(auditEvents)
-        .where(eq(auditEvents.eventType, 'auth.login.succeeded'));
-      await db
-        .delete(auditEvents)
-        .where(eq(auditEvents.eventType, 'auth.logout'));
-      await db
-        .delete(auditEvents)
-        .where(eq(auditEvents.eventType, 'auth.refresh.succeeded'));
-      await db
-        .delete(auditEvents)
-        .where(eq(auditEvents.eventType, 'auth.refresh.failed'));
-      recordedEvents.length = 0;
+      const testUsers = await db
+        .select({ id: users.id })
+        .from(users)
+        .where(eq(users.email, 'audit.test@exemplo'));
+      for (const user of testUsers) {
+        await db.delete(userCredentials).where(eq(userCredentials.userId, user.id));
+        await db.delete(userTokens).where(eq(userTokens.userId, user.id));
+        await db.delete(auditEvents).where(eq(auditEvents.actorUserId, user.id));
+        await db.delete(users).where(eq(users.id, user.id));
+      }
     });
 
-    it('deve ter o serviço de auditoria disponível', () => {
-      expect(service).toBeDefined();
-      expect(service.auditService).toBeDefined();
-      expect(typeof service.auditService.record).toBe('function');
-    });
+    it('deve registrar evento de login bem-sucedido com trace_id (C-16)', async () => {
+      const db = getDb(dbUrl);
+      const senhaCorreta = 'senha_auditoria_123';
+      const senhaHash = await hash(senhaCorreta);
 
-    it('deve ser possível registrar eventos com trace_id', async () => {
-      await service.auditService.record({
-        traceId: 'trace-teste-auditoria-001',
-        eventType: 'auth.login.failed',
-        actorUserId: undefined,
-        sessionId: undefined,
-        action: 'login',
-        resourceType: 'session',
-        resourceId: undefined,
-        permissionCode: undefined,
-        policyId: undefined,
-        decision: 'negado',
-        reasonCode: 'INVALID_CREDENTIALS',
-        toolName: 'login',
-        status: undefined,
-        durationMs: undefined,
-        metadata: undefined,
+      const [user] = await db
+        .insert(users)
+        .values({
+          email: 'audit.test@exemplo',
+          name: 'Audit Test User',
+          status: 'active',
+        })
+        .returning();
+
+      await db.insert(userCredentials).values({
+        userId: user.id,
+        passwordHash: senhaHash,
+        failedLoginAttempts: 0,
+        lockedUntil: null,
       });
 
-      expect(recordedEvents.length).toBeGreaterThanOrEqual(0);
-    });
+      await runWithTraceId('trace-audit-login-success', () =>
+          service.login({
+          email: 'audit.test@exemplo',
+          password: senhaCorreta,
+     }),
+);
 
-    it('deve persistir evento de auditoria no banco com trace_id', async () => {
-      const db = getDb(dbUrl);
-      const traceId = 'trace-persist-auditoria-001';
-
-      await service.auditService.record({
-        traceId,
-        eventType: 'auth.login.failed',
-        actorUserId: undefined,
-        sessionId: undefined,
-        action: 'login',
-        resourceType: 'session',
-        resourceId: undefined,
-        permissionCode: undefined,
-        policyId: undefined,
-        decision: 'negado',
-        reasonCode: 'INVALID_CREDENTIALS',
-        toolName: 'login',
-        status: undefined,
-        durationMs: undefined,
-        metadata: undefined,
-      });
-
+      // Verifica se existe evento de login bem-sucedido no banco
       const [evento] = await db
         .select()
         .from(auditEvents)
-        .where(eq(auditEvents.traceId, traceId))
+        .where(
+           and(
+              eq(auditEvents.eventType, 'auth.login.succeeded'),
+              eq(auditEvents.decision, 'permitido'),
+              eq(auditEvents.actorUserId, user.id),
+            ),
+          )
+        .orderBy(auditEvents.occurredAt, { descending: true })
         .limit(1);
 
       expect(evento).toBeDefined();
-      expect(evento.trace_id).toBe(traceId);
-      expect(evento.event_type).toBe('auth.login.failed');
+      expect(evento.traceId).toBeDefined();
+      expect(evento.eventType).toBe('auth.login.succeeded');
+      expect(evento.decision).toBe('permitido');
+      expect(evento.reasonCode).toBe('CREDENTIALS_VALID');
+      expect(evento.actorUserId).toBe(user.id);
+    });
+
+    it('deve registrar evento de autorização negada com trace_id (C-16)', async () => {
+      const db = getDb(dbUrl);
+      const senhaCorreta = 'senha_auditoria_123';
+      const senhaHash = await hash(senhaCorreta);
+
+      const [user] = await db
+        .insert(users)
+        .values({
+          email: 'audit.test@exemplo',
+          name: 'Audit Test User',
+          status: 'active',
+        })
+        .returning();
+
+      await db.insert(userCredentials).values({
+        userId: user.id,
+        passwordHash: senhaHash,
+        failedLoginAttempts: 0,
+        lockedUntil: null,
+      });
+
+      // Tenta login com senha errada
+      try {
+          await runWithTraceId('trace-audit-login-failed', () =>
+          service.login({
+          email: 'audit.test@exemplo',
+          password: 'senha_errada',
+  }),
+);
+      } catch {
+        // Erro esperado
+      }
+
+      // Verifica se existe evento de autorização negada
+      const [evento] = await db
+        .select()
+        .from(auditEvents)
+        .where(
+          and(
+              eq(auditEvents.eventType, 'auth.login.failed'),
+              eq(auditEvents.decision, 'negado'),
+              eq(auditEvents.actorUserId, user.id),
+             ),
+         )
+        .orderBy(auditEvents.occurredAt, { descending: true })
+        .limit(1);
+
+      expect(evento).toBeDefined();
+      expect(evento.traceId).toBeDefined();
+      expect(evento.eventType).toBe('auth.login.failed');
       expect(evento.decision).toBe('negado');
-      expect(evento.reason_code).toBe('INVALID_CREDENTIALS');
+      expect(evento.reasonCode).toBe('INVALID_CREDENTIALS');
+    });
+
+    it('deve persistir evento de logout com trace_id', async () => {
+      const db = getDb(dbUrl);
+      const senhaCorreta = 'senha_auditoria_logout_123';
+      const senhaHash = await hash(senhaCorreta);
+
+      const [user] = await db
+        .insert(users)
+        .values({
+          email: 'audit.test@exemplo',
+          name: 'Audit Test User',
+          status: 'active',
+        })
+        .returning();
+
+      await db.insert(userCredentials).values({
+        userId: user.id,
+        passwordHash: senhaHash,
+        failedLoginAttempts: 0,
+        lockedUntil: null,
+      });
+
+      const result = await service.login({
+        email: 'audit.test@exemplo',
+        password: senhaCorreta,
+      });
+
+      expect(result.sessionSecret).toBeDefined();
+
+      // Faz logout
+      await service.logout(result.sessionSecret);
+
+      // Verifica se existe evento de logout
+      const [evento] = await db
+        .select()
+        .from(auditEvents)
+        .where(
+           and(
+               eq(auditEvents.eventType, 'auth.logout'),
+               eq(auditEvents.decision, 'permitido'),
+               eq(auditEvents.actorUserId, user.id),
+              ),
+          )
+        .orderBy(auditEvents.occurredAt, { descending: true })
+        .limit(1);
+
+      expect(evento).toBeDefined();
+      expect(evento.traceId).toBeDefined();
+      expect(evento.eventType).toBe('auth.logout');
+      expect(evento.decision).toBe('permitido');
+      expect(evento.reasonCode).toBe('USER_LOGOUT');
     });
   },
 );

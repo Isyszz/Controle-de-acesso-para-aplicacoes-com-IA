@@ -5,7 +5,7 @@ import { randomUUID } from 'crypto';
 import { AppError } from '../../shared/errors/app-error.js';
 import { redactMetadata } from '../../shared/errors/sensitive-fields.js';
 import { getTraceId } from '../../shared/trace/trace.context.js';
-import { getDb } from '../../infrastructure/database/index.js';
+import { getDb, type Db } from '../../infrastructure/database/index.js';
 import {
   userCredentials,
   userTokens,
@@ -20,6 +20,7 @@ import {
   TokenPair,
 } from './auth.types.js';
 import { AuditService } from '../../features/audit/audit.service.js';
+import { AuditEventInput } from '../../features/audit/audit.types.js';
 
 const SESSION_TTL_MINUTES =
   Number(process.env.SESSION_TTL_MINUTES ?? 30) * 60 * 1000;
@@ -29,6 +30,25 @@ if (!CSRF_SECRET_ENV) {
   throw new Error('CSRF_SECRET não definida. Configure o arquivo .env.');
 }
 const CSRF_SECRET: string = CSRF_SECRET_ENV;
+
+type LoginTxResult =
+  | {
+      kind: 'success';
+      userId: string;
+      email: string;
+      name: string;
+      csrfToken: string;
+      sessionSecret: string;
+      sessionId: string;
+    }
+  | {
+      kind: 'failure';
+      statusCode: number;
+      reasonCode: string;
+      actorUserId: string | undefined;
+    };
+
+type LoginTx = Parameters<Parameters<Db['transaction']>[0]>[0];
 
 function generateSessionSecret(): string {
   return randomUUID();
@@ -50,207 +70,58 @@ function nowMs(): number {
 export class AuthService {
   constructor(private readonly auditService: AuditService) {}
 
-  private async recordAudit(
-    tx: any,
-    eventType: string,
-    action: string,
-    decision: 'permitido' | 'negado',
-    reasonCode: string,
-    userId: string | null,
-    sessionId: string | null,
-    toolName: string | null,
-    metadata: Record<string, unknown> | undefined,
-  ): Promise<void> {
+  private async recordAudit(input: AuditEventInput): Promise<void> {
     await this.auditService.record({
-      traceId: getTraceId() ?? '',
-      eventType,
-      actorUserId: userId ?? undefined,
-      sessionId: sessionId ?? undefined,
-      action,
-      resourceType: 'session',
-      resourceId: sessionId ?? undefined,
-      permissionCode: undefined,
-      policyId: undefined,
-      decision,
-      reasonCode,
-      toolName: toolName ?? undefined,
-      status: undefined,
-      durationMs: undefined,
-      metadata: redactMetadata(metadata),
+      ...input,
+      metadata: redactMetadata(input.metadata),
     });
   }
 
   async login(input: LoginInput): Promise<LoginOutput> {
     const db = getDb();
+    const traceId = getTraceId() ?? '';
 
     const result = await db.transaction(async (tx) => {
-      const [user] = await tx
-        .select()
-        .from(users)
-        .where(eq(users.email, input.email));
-
-      if (!user) {
-        await this.recordFailedAttempt(tx, null);
-        await this.recordAudit(
-          tx,
-          'auth.login.failed',
-          'login',
-          'negado',
-          'INVALID_CREDENTIALS',
-          null,
-          null,
-          'login',
-          { email: input.email },
-        );
-        throw new AppError(
-          'AUTH_INVALID_CREDENTIALS',
-          'Credenciais inválidas.',
-          401,
-        );
-      }
-
-      if (user.status !== 'active') {
-        await this.recordFailedAttempt(tx, user.id);
-        await this.recordAudit(
-          tx,
-          'auth.login.failed',
-          'login',
-          'negado',
-          'ACCOUNT_DISABLED',
-          user.id,
-          null,
-          'login',
-          { email: input.email },
-        );
-        throw new AppError(
-          'AUTH_INVALID_CREDENTIALS',
-          'Credenciais inválidas.',
-          401,
-        );
-      }
-
-      const [credential] = await tx
-        .select()
-        .from(userCredentials)
-        .where(eq(userCredentials.userId, user.id));
-
-      if (!credential) {
-        await this.recordFailedAttempt(tx, user.id);
-        await this.recordAudit(
-          tx,
-          'auth.login.failed',
-          'login',
-          'negado',
-          'INVALID_CREDENTIALS',
-          user.id,
-          null,
-          'login',
-          { email: input.email },
-        );
-        throw new AppError(
-          'AUTH_INVALID_CREDENTIALS',
-          'Credenciais inválidas.',
-          401,
-        );
-      }
-
-      if (
-        credential.lockedUntil &&
-        new Date(credential.lockedUntil) > new Date()
-      ) {
-        await this.recordAudit(
-          tx,
-          'auth.login.failed',
-          'login',
-          'negado',
-          'ACCOUNT_LOCKED',
-          user.id,
-          null,
-          'login',
-          { email: input.email },
-        );
-        throw new AppError(
-          'AUTH_INVALID_CREDENTIALS',
-          'Credenciais inválidas.',
-          401,
-        );
-      }
-
-      const passwordValid = await verify(
-        credential.passwordHash,
-        input.password,
-      );
-
-      if (!passwordValid) {
-        await this.recordFailedAttempt(tx, user.id);
-        await this.recordAudit(
-          tx,
-          'auth.login.failed',
-          'login',
-          'negado',
-          'INVALID_CREDENTIALS',
-          user.id,
-          null,
-          'login',
-          { email: input.email },
-        );
-        throw new AppError(
-          'AUTH_INVALID_CREDENTIALS',
-          'Credenciais inválidas.',
-          401,
-        );
-      }
-
-      await tx
-        .update(userCredentials)
-        .set({
-          failedLoginAttempts: 0,
-          lockedUntil: null,
-          updatedAt: new Date(),
-        })
-        .where(eq(userCredentials.userId, user.id));
-
-      const sessionSecret = generateSessionSecret();
-      const secretHash = computeSecretHash(sessionSecret);
-      const sessionStart = new Date();
-      const expiresAt = new Date(nowMs() + SESSION_TTL_MINUTES);
-
-      const [createdSession] = await tx
-        .insert(userTokens)
-        .values({
-          userId: user.id,
-          secretHash,
-          createdAt: new Date(),
-          lastActivityAt: new Date(),
-          expiresAt,
-          revokedAt: null,
-          sessionStart,
-        })
-        .returning();
-
-      const csrfToken = computeCsrfToken(createdSession.id);
-
-      await this.recordAudit(
-        tx,
-        'auth.login.succeeded',
-        'login',
-        'permitido',
-        'CREDENTIALS_VALID',
-        user.id,
-        createdSession.id,
-        'login',
-        { email: input.email },
-      );
-
-      return {
-        userId: user.id,
-        email: user.email,
-        name: user.name,
-        csrfToken,
-        sessionSecret,
-        sessionId: createdSession.id,
-      };
+      return this.executeLoginTransaction(tx, input, traceId);
     });
+
+    const baseAudit = {
+      traceId,
+      action: 'login',
+      toolName: 'login',
+      metadata: { email: input.email },
+    } as const;
+
+    if (result.kind === 'failure') {
+      await this.recordAudit({
+        ...baseAudit,
+        eventType: 'auth.login.failed',
+        decision: 'negado' as const,
+        sessionId: undefined,
+        reasonCode: result.reasonCode,
+        actorUserId: result.actorUserId,
+      });
+      throw new AppError(
+        'AUTH_INVALID_CREDENTIALS',
+        'Credenciais inválidas.',
+        result.statusCode,
+      );
+    }
+
+    // Auditoria de sucesso somente após o commit da transação.
+    try {
+      await this.recordAudit({
+        ...baseAudit,
+        eventType: 'auth.login.succeeded',
+        decision: 'permitido',
+        reasonCode: 'CREDENTIALS_VALID',
+        actorUserId: result.userId,
+        sessionId: result.sessionId,
+      });
+    } catch {
+      // Se a auditoria falhar, retorna erro 500 sem tentar revogar a sessão.
+      throw new AppError('AUTH_AUDIT_FAILED', 'Falha interna ao registrar auditoria.', 500);
+    }
 
     return {
       userId: result.userId,
@@ -258,111 +129,223 @@ export class AuthService {
       name: result.name,
       csrfToken: result.csrfToken,
       sessionSecret: result.sessionSecret,
+      sessionId: result.sessionId,
     };
   }
 
-  private async recordFailedAttempt(
-    tx: any,
-    userId: string | null,
-  ): Promise<void> {
-    if (!userId) {
-      return;
+  private async executeLoginTransaction(
+    tx: LoginTx,
+    input: LoginInput,
+    traceId: string,
+  ): Promise<LoginTxResult> {
+    const [user] = await tx
+      .select()
+      .from(users)
+      .where(eq(users.email, input.email));
+
+    if (!user) {
+      return {
+        kind: 'failure',
+        statusCode: 401,
+        reasonCode: 'INVALID_CREDENTIALS',
+        actorUserId: undefined,
+      };
+    }
+
+    if (user.status !== 'active') {
+      // Conta desabilitada: incrementa apenas se existir credencial associada.
+      const [credential] = await tx
+        .select()
+        .from(userCredentials)
+        .where(eq(userCredentials.userId, user.id))
+        .for('update');
+
+      if (credential) {
+        const newAttempts = credential.failedLoginAttempts + 1;
+        const lockedUntil =
+          newAttempts >= 5 ? new Date(nowMs() + 15 * 60 * 1000) : null;
+
+        await tx
+          .update(userCredentials)
+          .set({
+            failedLoginAttempts: newAttempts,
+            lockedUntil,
+            updatedAt: new Date(),
+          })
+          .where(eq(userCredentials.userId, user.id));
+      }
+
+      return {
+        kind: 'failure',
+        statusCode: 401,
+        reasonCode: 'ACCOUNT_DISABLED',
+        actorUserId: user.id,
+      };
     }
 
     const [credential] = await tx
       .select()
       .from(userCredentials)
-      .where(eq(userCredentials.userId, userId))
+      .where(eq(userCredentials.userId, user.id))
       .for('update');
 
     if (!credential) {
-      return;
+      // Não existe registro em user_credentials: não há contador para incrementar.
+      return {
+        kind: 'failure',
+        statusCode: 401,
+        reasonCode: 'INVALID_CREDENTIALS',
+        actorUserId: user.id,
+      };
     }
 
-    const newAttempts = credential.failedLoginAttempts + 1;
-    const lockedUntil =
-      newAttempts >= 5 ? new Date(nowMs() + 15 * 60 * 1000) : null;
+    if (
+      credential.lockedUntil &&
+      new Date(credential.lockedUntil) > new Date()
+    ) {
+      return {
+        kind: 'failure',
+        statusCode: 401,
+        reasonCode: 'ACCOUNT_LOCKED',
+        actorUserId: user.id,
+      };
+    }
+
+    const passwordValid = await verify(
+      credential.passwordHash,
+      input.password,
+    );
+
+    if (!passwordValid) {
+      const newAttempts = credential.failedLoginAttempts + 1;
+      const lockedUntil =
+        newAttempts >= 5 ? new Date(nowMs() + 15 * 60 * 1000) : null;
+
+      await tx
+        .update(userCredentials)
+        .set({
+          failedLoginAttempts: newAttempts,
+          lockedUntil,
+          updatedAt: new Date(),
+        })
+        .where(eq(userCredentials.userId, user.id));
+
+      return {
+        kind: 'failure',
+        statusCode: 401,
+        reasonCode: 'INVALID_CREDENTIALS',
+        actorUserId: user.id,
+      };
+    }
 
     await tx
       .update(userCredentials)
       .set({
-        failedLoginAttempts: newAttempts,
-        lockedUntil,
+        failedLoginAttempts: 0,
+        lockedUntil: null,
         updatedAt: new Date(),
       })
-      .where(eq(userCredentials.userId, userId));
+      .where(eq(userCredentials.userId, user.id));
+
+    const sessionSecret = generateSessionSecret();
+    const secretHash = computeSecretHash(sessionSecret);
+    const sessionStart = new Date();
+    const expiresAt = new Date(nowMs() + SESSION_TTL_MINUTES);
+
+    const [createdSession] = await tx
+      .insert(userTokens)
+      .values({
+        userId: user.id,
+        secretHash,
+        createdAt: new Date(),
+        lastActivityAt: new Date(),
+        expiresAt,
+        revokedAt: null,
+        sessionStart,
+      })
+      .returning();
+
+    const csrfToken = computeCsrfToken(createdSession.id);
+
+    return {
+      kind: 'success',
+      userId: user.id,
+      email: user.email,
+      name: user.name,
+      csrfToken,
+      sessionSecret,
+      sessionId: createdSession.id,
+    };
   }
 
-  async logout(sessionId: string): Promise<void> {
+  async logout(sessionHash: string): Promise<void> {
     const db = getDb();
+    const secretHash = computeSecretHash(sessionHash);
 
-    await db
-      .update(userTokens)
-      .set({ revokedAt: new Date() })
-      .where(eq(userTokens.id, sessionId));
+    const [session] = await db
+      .select()
+      .from(userTokens)
+      .where(
+        and(
+          eq(userTokens.secretHash, secretHash),
+          isNull(userTokens.revokedAt),
+        ),
+      );
 
-    await this.auditService.record({
-      traceId: getTraceId() ?? '',
-      eventType: 'auth.logout',
-      actorUserId: undefined,
-      sessionId,
-      action: 'logout',
-      resourceType: 'session',
-      resourceId: sessionId,
-      permissionCode: undefined,
-      policyId: undefined,
-      decision: 'permitido',
-      reasonCode: 'USER_LOGOUT',
-      toolName: 'logout',
-      status: undefined,
-      durationMs: undefined,
-      metadata: undefined,
-    });
+    if (session) {
+      await db
+        .update(userTokens)
+        .set({ revokedAt: new Date() })
+        .where(eq(userTokens.id, session.id));
+
+      await this.auditService.record({
+        traceId: getTraceId() ?? '',
+        eventType: 'auth.logout',
+        actorUserId: session.userId,
+        sessionId: session.id,
+        action: 'logout',
+        resourceType: 'session',
+        resourceId: session.id,
+        permissionCode: undefined,
+        policyId: undefined,
+        decision: 'permitido',
+        reasonCode: 'USER_LOGOUT',
+        toolName: 'logout',
+        status: undefined,
+        durationMs: undefined,
+        metadata: undefined,
+      });
+    }
   }
 
-  async refresh(sessionId: string): Promise<TokenPair> {
+  async refresh(sessionHash: string): Promise<TokenPair> {
     const db = getDb();
+    const secretHash = computeSecretHash(sessionHash);
 
     const result = await db.transaction(async (tx) => {
       const [session] = await tx
         .select()
         .from(userTokens)
-        .where(eq(userTokens.id, sessionId));
+        .where(
+          and(
+            eq(userTokens.secretHash, secretHash),
+            isNull(userTokens.revokedAt),
+          ),
+        );
 
       if (!session) {
         await this.auditService.record({
           traceId: getTraceId() ?? '',
           eventType: 'auth.refresh.failed',
           actorUserId: undefined,
-          sessionId,
+          sessionId: undefined,
           action: 'refresh',
           resourceType: 'session',
-          resourceId: sessionId,
+          resourceId: undefined,
           permissionCode: undefined,
           policyId: undefined,
           decision: 'negado',
           reasonCode: 'SESSION_INVALID',
-          toolName: 'refresh',
-          status: undefined,
-          durationMs: undefined,
-          metadata: undefined,
-        });
-        throw new AppError('AUTH_SESSION_INVALID', 'Sessão inválida.', 401);
-      }
-
-      if (session.revokedAt) {
-        await this.auditService.record({
-          traceId: getTraceId() ?? '',
-          eventType: 'auth.refresh.failed',
-          actorUserId: session.userId,
-          sessionId,
-          action: 'refresh',
-          resourceType: 'session',
-          resourceId: sessionId,
-          permissionCode: undefined,
-          policyId: undefined,
-          decision: 'negado',
-          reasonCode: 'SESSION_REVOKED',
           toolName: 'refresh',
           status: undefined,
           durationMs: undefined,
@@ -376,10 +359,10 @@ export class AuthService {
           traceId: getTraceId() ?? '',
           eventType: 'auth.refresh.failed',
           actorUserId: session.userId,
-          sessionId,
+          sessionId: session.id,
           action: 'refresh',
           resourceType: 'session',
-          resourceId: sessionId,
+          resourceId: session.id,
           permissionCode: undefined,
           policyId: undefined,
           decision: 'negado',
@@ -396,15 +379,16 @@ export class AuthService {
         session.sessionStart.getTime() +
           SESSION_ABSOLUTE_HOURS * 60 * 60 * 1000,
       );
+
       if (new Date() > absoluteLimit) {
         await this.auditService.record({
           traceId: getTraceId() ?? '',
           eventType: 'auth.refresh.failed',
           actorUserId: session.userId,
-          sessionId,
+          sessionId: session.id,
           action: 'refresh',
           resourceType: 'session',
-          resourceId: sessionId,
+          resourceId: session.id,
           permissionCode: undefined,
           policyId: undefined,
           decision: 'negado',
@@ -420,7 +404,7 @@ export class AuthService {
       await tx
         .update(userTokens)
         .set({ revokedAt: new Date() })
-        .where(eq(userTokens.id, sessionId));
+        .where(eq(userTokens.id, session.id));
 
       const newSecret = generateSessionSecret();
       const newSecretHash = computeSecretHash(newSecret);
@@ -471,19 +455,32 @@ export class AuthService {
     };
   }
 
-  async me(sessionId: string): Promise<AuthUser> {
+  async me(sessionHash: string): Promise<AuthUser> {
     const db = getDb();
+    const secretHash = computeSecretHash(sessionHash);
 
     const [session] = await db
       .select()
       .from(userTokens)
-      .where(eq(userTokens.id, sessionId));
+      .where(
+        and(
+          eq(userTokens.secretHash, secretHash),
+          isNull(userTokens.revokedAt),
+        ),
+      );
 
-    if (!session || session.revokedAt) {
+    if (!session) {
       throw new AppError('AUTH_SESSION_INVALID', 'Sessão inválida.', 401);
     }
 
     if (new Date(session.expiresAt) <= new Date()) {
+      throw new AppError('AUTH_SESSION_INVALID', 'Sessão inválida.', 401);
+    }
+
+    const absoluteLimit = new Date(
+      session.sessionStart.getTime() + SESSION_ABSOLUTE_HOURS * 60 * 60 * 1000,
+    );
+    if (new Date() > absoluteLimit) {
       throw new AppError('AUTH_SESSION_INVALID', 'Sessão inválida.', 401);
     }
 
@@ -499,7 +496,7 @@ export class AuthService {
     await db
       .update(userTokens)
       .set({ lastActivityAt: new Date() })
-      .where(eq(userTokens.id, sessionId));
+      .where(eq(userTokens.id, session.id));
 
     return {
       id: user.id,
@@ -509,19 +506,32 @@ export class AuthService {
     };
   }
 
-  async validateSession(sessionId: string): Promise<AuthSession | null> {
+  async validateSession(sessionHash: string): Promise<AuthSession | null> {
     const db = getDb();
+    const secretHash = computeSecretHash(sessionHash);
 
     const [session] = await db
       .select()
       .from(userTokens)
-      .where(eq(userTokens.id, sessionId));
+      .where(
+        and(
+          eq(userTokens.secretHash, secretHash),
+          isNull(userTokens.revokedAt),
+        ),
+      );
 
-    if (!session || session.revokedAt) {
+    if (!session) {
       return null;
     }
 
     if (new Date(session.expiresAt) <= new Date()) {
+      return null;
+    }
+
+    const absoluteLimit = new Date(
+      session.sessionStart.getTime() + SESSION_ABSOLUTE_HOURS * 60 * 60 * 1000,
+    );
+    if (new Date() > absoluteLimit) {
       return null;
     }
 

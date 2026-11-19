@@ -11,6 +11,7 @@ export interface LoginOutput {
   name: string;
   csrfToken: string;
   sessionSecret: string;
+  sessionId: string;
 }
 
 export interface AuthSession {

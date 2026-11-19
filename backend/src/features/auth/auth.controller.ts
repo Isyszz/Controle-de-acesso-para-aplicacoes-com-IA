@@ -24,10 +24,7 @@ if (!CSRF_SECRET_ENV) {
   throw new Error('CSRF_SECRET não definida. Configure o arquivo .env.');
 }
 const CSRF_SECRET: string = CSRF_SECRET_ENV;
-
-function getFrontendOrigin(): string | undefined {
-  return process.env.FRONTEND_ORIGIN;
-}
+const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN;
 
 function computeCsrfToken(sessionId: string): string {
   return createHmac('sha256', CSRF_SECRET).update(sessionId).digest('hex');
@@ -45,11 +42,10 @@ function validateCsrfToken(
 }
 
 function validateOrigin(origin: string | undefined): boolean {
-  const frontendOrigin = getFrontendOrigin();
-  if (!frontendOrigin) {
+  if (!FRONTEND_ORIGIN) {
     return true;
   }
-  return origin === frontendOrigin;
+  return origin === FRONTEND_ORIGIN;
 }
 
 @Controller('auth')
