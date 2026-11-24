@@ -14,7 +14,6 @@ export const clients = pgTable(
   {
     id: uuid('id').primaryKey().defaultRandom(),
     name: text('name').notNull(),
-
     createdAt: timestamp('created_at', { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -35,7 +34,6 @@ export const users = pgTable(
     name: text('name').notNull(),
     email: text('email').notNull().unique(),
     status: text('status').notNull().default('active'),
-
     createdAt: timestamp('created_at', { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -48,7 +46,6 @@ export const users = pgTable(
       columns: [table.clientId],
       foreignColumns: [clients.id],
     }),
-
     emailIdx: index('users_email_idx').on(table.email),
     statusIdx: index('users_status_idx').on(table.status),
   }),
@@ -62,10 +59,8 @@ export const userCredentials = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
     passwordHash: text('password_hash').notNull(),
-
     failedLoginAttempts: integer('failed_login_attempts').notNull().default(0),
     lockedUntil: timestamp('locked_until', { withTimezone: true }),
-
     createdAt: timestamp('created_at', { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -86,7 +81,6 @@ export const userTokens = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
     secretHash: text('secret_hash').notNull().unique(),
-
     createdAt: timestamp('created_at', { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -110,9 +104,7 @@ export const roles = pgTable(
     id: uuid('id').primaryKey().defaultRandom(),
     code: text('code').notNull().unique(),
     name: text('name').notNull(),
-
     inheritsFromRoleId: uuid('inherits_from_role_id'),
-
     createdAt: timestamp('created_at', { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -131,7 +123,6 @@ export const permissions = pgTable(
     id: uuid('id').primaryKey().defaultRandom(),
     code: text('code').notNull().unique(),
     description: text('description').notNull(),
-
     createdAt: timestamp('created_at', { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -176,7 +167,6 @@ export const rolePermissions = pgTable(
     permissionId: uuid('permission_id')
       .notNull()
       .references(() => permissions.id, { onDelete: 'cascade' }),
-
     createdAt: timestamp('created_at', { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -202,10 +192,8 @@ export const auditEvents = pgTable(
       .defaultNow()
       .notNull(),
     eventType: text('event_type').notNull(),
-
     actorUserId: uuid('actor_user_id').references(() => users.id),
     sessionId: text('session_id'),
-
     action: text('action').notNull(),
     resourceType: text('resource_type'),
     resourceId: text('resource_id'),

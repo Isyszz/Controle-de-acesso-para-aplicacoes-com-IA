@@ -5,6 +5,7 @@ import { AppController } from './app.controller.js';
 import { AppService } from './app.service.js';
 import { HealthController } from './features/audit/health.controller.js';
 import { AuditModule } from './features/audit/audit.module.js';
+import { AuthModule } from './features/auth/auth.module.js';
 import { HttpExceptionFilter } from './shared/errors/http-exception.filter.js';
 import { TraceMiddleware } from './shared/trace/trace.middleware.js';
 
@@ -18,6 +19,7 @@ export const { ObserveModule, ObserveInstrument } = createObserveModule();
       serviceId: 'backend',
     }),
     AuditModule,
+    AuthModule,
   ],
   controllers: [AppController, HealthController],
   providers: [

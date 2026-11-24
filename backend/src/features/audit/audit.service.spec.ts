@@ -1,21 +1,21 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { AuditService, resetDb, toAuditEvent } from './audit.service.js';
 import { getDb } from '../../infrastructure/database/index.js';
-import { auditEvents } from '../../infrastructure/database/schema.js';
+import { auditEvents, users } from '../../infrastructure/database/schema.js';
 import { eq } from 'drizzle-orm';
 
 const TEST_TRACE_ID = 'trace-persist-001';
 
-const baseInput = {
+const createBaseInput = (actorUserId: string) => ({
   traceId: TEST_TRACE_ID,
   eventType: 'auth.login.succeeded',
-  actorUserId: 'user-1',
+  actorUserId,
   sessionId: 'session-1',
   action: 'login',
   resourceType: 'session',
   decision: 'permitido' as const,
   reasonCode: 'CREDENTIALS_VALID',
-};
+});
 
 const dbUrl = process.env.DATABASE_URL_TEST;
 
@@ -23,21 +23,21 @@ describe('AuditService.toAuditEvent (unitário)', () => {
   it('deve mapear linha do banco para AuditEvent', () => {
     const row = {
       id: 'uuid-123',
-      trace_id: 'trace-abc',
-      occurred_at: new Date('2026-01-01T00:00:00Z'),
-      event_type: 'auth.login.succeeded',
-      actor_user_id: 'user-1',
-      session_id: 'session-1',
+      traceId: 'trace-abc',
+      occurredAt: new Date('2026-01-01T00:00:00Z'),
+      eventType: 'auth.login.succeeded',
+      actorUserId: 'user-1',
+      sessionId: 'session-1',
       action: 'login',
-      resource_type: 'session',
-      resource_id: 'sess-1',
-      permission_code: null,
-      policy_id: null,
+      resourceType: 'session',
+      resourceId: 'sess-1',
+      permissionCode: null,
+      policyId: null,
       decision: 'permitido',
-      reason_code: 'CREDENTIALS_VALID',
-      tool_name: null,
+      reasonCode: 'CREDENTIALS_VALID',
+      toolName: null,
       status: 200,
-      duration_ms: 42,
+      durationMs: 42,
       metadata: JSON.stringify({ ip: '192.168.1.1' }),
     };
 
@@ -65,21 +65,21 @@ describe('AuditService.toAuditEvent (unitário)', () => {
   it('deve tratar valores nulos como undefined', () => {
     const row: Record<string, unknown> = {
       id: 'uuid-1',
-      trace_id: 'trace-1',
-      occurred_at: new Date(),
-      event_type: 'test',
-      actor_user_id: null,
-      session_id: null,
+      traceId: 'trace-1',
+      occurredAt: new Date(),
+      eventType: 'test',
+      actorUserId: null,
+      sessionId: null,
       action: 'test',
-      resource_type: null,
-      resource_id: null,
-      permission_code: null,
-      policy_id: null,
+      resourceType: null,
+      resourceId: null,
+      permissionCode: null,
+      policyId: null,
       decision: 'negado',
-      reason_code: 'MISSING_PERMISSION',
-      tool_name: null,
+      reasonCode: 'MISSING_PERMISSION',
+      toolName: null,
       status: null,
-      duration_ms: null,
+      durationMs: null,
       metadata: null,
     };
 
@@ -101,8 +101,20 @@ describe('AuditService.toAuditEvent (unitário)', () => {
 const integrationTests = dbUrl ? describe : describe.skip;
 
 integrationTests('AuditService (integração - requer DATABASE_URL_TEST)', () => {
-  beforeEach(() => {
+  let testUserId: string;
+
+  beforeEach(async () => {
     resetDb();
+    const db = getDb(dbUrl);
+    const [user] = await db
+      .insert(users)
+      .values({
+        email: 'audit.integration@exemplo',
+        name: 'Audit Integration User',
+        status: 'active',
+      })
+      .returning();
+    testUserId = user.id;
   });
 
   afterEach(async () => {
@@ -111,6 +123,10 @@ integrationTests('AuditService (integração - requer DATABASE_URL_TEST)', () =>
       await db
         .delete(auditEvents)
         .where(eq(auditEvents.traceId, TEST_TRACE_ID));
+      await db
+        .delete(auditEvents)
+        .where(eq(auditEvents.actorUserId, testUserId));
+      await db.delete(users).where(eq(users.id, testUserId));
     } catch {}
     resetDb();
   });
@@ -118,7 +134,7 @@ integrationTests('AuditService (integração - requer DATABASE_URL_TEST)', () =>
   it('deve registrar um evento e recuperá-lo por traceId', async () => {
     const service = new AuditService();
 
-    await service.record(baseInput);
+    await service.record(createBaseInput(testUserId));
 
     const events = await service.findByTraceIdAsync(TEST_TRACE_ID);
     expect(events.length).toBeGreaterThanOrEqual(1);
@@ -126,7 +142,7 @@ integrationTests('AuditService (integração - requer DATABASE_URL_TEST)', () =>
     expect(events[0].decision).toBe('permitido');
     expect(events[0].reasonCode).toBe('CREDENTIALS_VALID');
     expect(events[0].traceId).toBe(TEST_TRACE_ID);
-    expect(events[0].actorUserId).toBe('user-1');
+    expect(events[0].actorUserId).toBe(testUserId);
     expect(events[0].sessionId).toBe('session-1');
     expect(events[0].id).toBeDefined();
     expect(events[0].occurredAt).toBeInstanceOf(Date);
@@ -136,7 +152,7 @@ integrationTests('AuditService (integração - requer DATABASE_URL_TEST)', () =>
     const service = new AuditService();
 
     await service.record({
-      ...baseInput,
+      ...createBaseInput(testUserId),
       traceId: 'trace-persist-002',
       eventType: 'authorization.denied',
       action: 'get_admin_sales_report',
@@ -158,14 +174,14 @@ integrationTests('AuditService (integração - requer DATABASE_URL_TEST)', () =>
     const service = new AuditService();
 
     await service.record({
-      ...baseInput,
+      ...createBaseInput(testUserId),
       traceId: 'trace-persist-a',
       action: 'login',
       decision: 'permitido',
       reasonCode: 'CREDENTIALS_VALID',
     });
     await service.record({
-      ...baseInput,
+      ...createBaseInput(testUserId),
       traceId: 'trace-persist-b',
       eventType: 'authorization.denied',
       action: 'read',
@@ -184,7 +200,7 @@ integrationTests('AuditService (integração - requer DATABASE_URL_TEST)', () =>
     const service = new AuditService();
 
     await service.record({
-      ...baseInput,
+      ...createBaseInput(testUserId),
       traceId: 'trace-persist-secret',
       action: 'login',
       decision: 'permitido',
@@ -202,14 +218,14 @@ integrationTests('AuditService (integração - requer DATABASE_URL_TEST)', () =>
     const service = new AuditService();
 
     await service.record({
-      ...baseInput,
+      ...createBaseInput(testUserId),
       traceId: 'trace-persist-uid-1',
       action: 'login',
       decision: 'permitido',
       reasonCode: 'CREDENTIALS_VALID',
     });
     await service.record({
-      ...baseInput,
+      ...createBaseInput(testUserId),
       traceId: 'trace-persist-uid-2',
       action: 'login',
       decision: 'permitido',
@@ -226,14 +242,14 @@ integrationTests('AuditService (integração - requer DATABASE_URL_TEST)', () =>
     const service = new AuditService();
 
     await service.record({
-      ...baseInput,
+      ...createBaseInput(testUserId),
       traceId: 'trace-persist-stats-1',
       action: 'login',
       decision: 'permitido',
       reasonCode: 'CREDENTIALS_VALID',
     });
     await service.record({
-      ...baseInput,
+      ...createBaseInput(testUserId),
       traceId: 'trace-persist-stats-2',
       eventType: 'authorization.denied',
       action: 'read',
@@ -250,10 +266,9 @@ integrationTests('AuditService (integração - requer DATABASE_URL_TEST)', () =>
     const service = new AuditService();
 
     await service.record({
+      ...createBaseInput(testUserId),
       traceId: 'trace-persist-error-001',
       eventType: 'tool.execution.failed',
-      actorUserId: 'user-1',
-      sessionId: 'session-1',
       action: 'execute',
       resourceType: 'tool',
       resourceId: 'get_own_sales',

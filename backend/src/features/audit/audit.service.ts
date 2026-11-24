@@ -22,35 +22,39 @@ function asString(value: unknown): string | undefined {
 
 export function toAuditEvent(row: unknown): AuditEvent {
   const r = row as Record<string, unknown>;
+
   return {
     id: asString(r.id) ?? '',
-    traceId: asString(r.trace_id) ?? '',
-    occurredAt: r.occurred_at
-      ? new Date(asString(r.occurred_at) ?? '')
+    traceId: asString(r.traceId) ?? '',
+    occurredAt: r.occurredAt
+      ? new Date(asString(r.occurredAt) ?? '')
       : new Date(),
-    eventType: asString(r.event_type) ?? '',
-    actorUserId: asString(r.actor_user_id),
-    sessionId: asString(r.session_id),
+    eventType: asString(r.eventType) ?? '',
+    actorUserId: asString(r.actorUserId),
+    sessionId: asString(r.sessionId),
     action: asString(r.action) ?? '',
-    resourceType: asString(r.resource_type),
-    resourceId: asString(r.resource_id),
-    permissionCode: asString(r.permission_code),
-    policyId: asString(r.policy_id),
+    resourceType: asString(r.resourceType),
+    resourceId: asString(r.resourceId),
+    permissionCode: asString(r.permissionCode),
+    policyId: asString(r.policyId),
     decision: (asString(r.decision) ?? 'erro') as AuditDecision,
-    reasonCode: asString(r.reason_code) ?? '',
-    toolName: asString(r.tool_name),
+    reasonCode: asString(r.reasonCode) ?? '',
+    toolName: asString(r.toolName),
     status:
       r.status !== undefined && r.status !== null
         ? Number(r.status)
         : undefined,
     durationMs:
-      r.duration_ms !== undefined && r.duration_ms !== null
-        ? Number(r.duration_ms)
+      r.durationMs !== undefined && r.durationMs !== null
+        ? Number(r.durationMs)
         : undefined,
-    metadata: r.metadata ? JSON.parse(asString(r.metadata) ?? '{}') : undefined,
+    metadata: r.metadata
+      ? typeof r.metadata === 'string'
+        ? JSON.parse(r.metadata)
+        : r.metadata
+      : undefined,
   };
 }
-
 @Injectable()
 export class AuditService implements AuditServicePort {
   private readonly logger = new AppLogger(AuditService.name);

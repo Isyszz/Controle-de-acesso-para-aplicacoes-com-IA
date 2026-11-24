@@ -16,11 +16,11 @@
     "start:debug": "nest start --debug --watch --env-file .env",
     "start:prod": "node dist/main",
     "lint": "oxlint --type-aware src/ test/",
-    "test": "NODE_ENV=test vitest run",
+    "test": "NODE_ENV=test CSRF_SECRET=test-secret-key vitest run",
     "test:watch": "NODE_ENV=test vitest",
-    "test:cov": "NODE_ENV=test vitest run --coverage",
-    "test:debug": "NODE_ENV=test vitest --inspect-brk --no-file-parallelism",
-    "test:e2e": "NODE_ENV=test vitest run --config ./vitest.config.e2e.ts"
+    "test:cov": "NODE_ENV=test CSRF_SECRET=test-secret-key vitest run --coverage",
+    "test:debug": "NODE_ENV=test CSRF_SECRET=test-secret-key vitest --inspect-brk --no-file-parallelism",
+    "test:e2e": "NODE_ENV=test CSRF_SECRET=test-secret-key vitest run --config ./vitest.config.e2e.ts"
   },
   "dependencies": {
     "@langchain/core": "^1.3.0",
