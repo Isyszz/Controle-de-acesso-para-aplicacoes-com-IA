@@ -28,16 +28,20 @@ integrationTests(
         .select({ id: users.id })
         .from(users)
         .where(
-           or(
-             eq(users.email, 'me.test@exemplo'),
-             eq(users.email, 'me.revoked@exemplo'),
-             eq(users.email, 'me.disabled@exemplo'),
+          or(
+            eq(users.email, 'me.test@exemplo'),
+            eq(users.email, 'me.revoked@exemplo'),
+            eq(users.email, 'me.disabled@exemplo'),
           ),
-      );
+        );
       for (const user of testUsers) {
-        await db.delete(userCredentials).where(eq(userCredentials.userId, user.id));
+        await db
+          .delete(userCredentials)
+          .where(eq(userCredentials.userId, user.id));
         await db.delete(userTokens).where(eq(userTokens.userId, user.id));
-        await db.delete(auditEvents).where(eq(auditEvents.actorUserId, user.id));
+        await db
+          .delete(auditEvents)
+          .where(eq(auditEvents.actorUserId, user.id));
         await db.delete(users).where(eq(users.id, user.id));
       }
     });
@@ -63,7 +67,6 @@ integrationTests(
         lockedUntil: null,
       });
 
-      // Faz login para obter sessão válida
       const result = await service.login({
         email: 'me.test@exemplo',
         password: senhaCorreta,
@@ -71,14 +74,12 @@ integrationTests(
 
       expect(result.userId).toBe(createdUser.id);
 
-      // Consulta /auth/me com a sessão válida
       const resultado = await service.me(result.sessionSecret);
 
       expect(resultado.id).toBe(createdUser.id);
       expect(resultado.email).toBe('me.test@exemplo');
       expect(resultado.name).toBe('Me Test User');
       expect(resultado.status).toBe('active');
-      // Não deve expor senha nem hash
       expect(resultado.passwordHash).toBeUndefined();
       expect(resultado.secretHash).toBeUndefined();
     });

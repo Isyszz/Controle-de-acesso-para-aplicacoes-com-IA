@@ -9,7 +9,7 @@ import {
   userTokens,
   auditEvents,
 } from '../../infrastructure/database/schema.js';
-import { eq, or } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { hash } from 'argon2';
 
 const dbUrl = process.env.DATABASE_URL_TEST;
@@ -29,9 +29,13 @@ integrationTests(
         .from(users)
         .where(eq(users.email, 'lockout.test@exemplo'));
       for (const user of testUsers) {
-        await db.delete(userCredentials).where(eq(userCredentials.userId, user.id));
+        await db
+          .delete(userCredentials)
+          .where(eq(userCredentials.userId, user.id));
         await db.delete(userTokens).where(eq(userTokens.userId, user.id));
-        await db.delete(auditEvents).where(eq(auditEvents.actorUserId, user.id));
+        await db
+          .delete(auditEvents)
+          .where(eq(auditEvents.actorUserId, user.id));
         await db.delete(users).where(eq(users.id, user.id));
       }
     });
@@ -54,7 +58,6 @@ integrationTests(
         lockedUntil: null,
       });
 
-      // 5 falhas consecutivas
       for (let i = 0; i < 5; i++) {
         await expect(
           service.login({
@@ -64,7 +67,6 @@ integrationTests(
         ).rejects.toThrow(AppError);
       }
 
-      // Verifica que a conta foi bloqueada
       const [credential] = await db
         .select()
         .from(userCredentials)
@@ -111,7 +113,6 @@ integrationTests(
         })
         .returning();
 
-      // Insere com senha conhecida
       const correctHash = await hash('senha_correta_789');
       await db.insert(userCredentials).values({
         userId: user.id,
@@ -120,7 +121,6 @@ integrationTests(
         lockedUntil: null,
       });
 
-      // Faz login com senha correta - deve zerar contagem
       const result = await service.login({
         email: 'lockout.test@exemplo',
         password: 'senha_correta_789',
@@ -129,7 +129,6 @@ integrationTests(
       expect(result).toBeDefined();
       expect(result.userId).toBe(user.id);
 
-      // Verifica que a contagem foi resetada
       const [credential] = await db
         .select()
         .from(userCredentials)

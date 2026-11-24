@@ -1,24 +1,3 @@
-/**
- * Módulo de validação do banco de testes.
- *
- * Garante que testes de integração usem exclusivamente DATABASE_URL_TEST
- * e que o destino seja o banco de teste esperado (dbprototipo_test em
- * localhost:5432). Nunca usa DATABASE_URL como fallback.
- */
-
-/**
- * Valida que DATABASE_URL_TEST está definida e aponta para o banco de teste
- * esperado. Não exibe credenciais nem URLs completas.
- *
- * Lança erro se:
- * - DATABASE_URL_TEST não estiver definida
- * - O banco não for dbprototipo_test
- * - O host não for localhost ou 127.0.0.1
- * - A porta não for 5432
- *
- * @returns void
- * @throws Error se a validação falhar
- */
 export function validateDatabaseUrlTest(): void {
   const databaseUrlTest = process.env.DATABASE_URL_TEST;
 

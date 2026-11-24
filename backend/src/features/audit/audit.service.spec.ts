@@ -123,7 +123,9 @@ integrationTests('AuditService (integração - requer DATABASE_URL_TEST)', () =>
       await db
         .delete(auditEvents)
         .where(eq(auditEvents.traceId, TEST_TRACE_ID));
-      await db.delete(auditEvents).where(eq(auditEvents.actorUserId, testUserId));
+      await db
+        .delete(auditEvents)
+        .where(eq(auditEvents.actorUserId, testUserId));
       await db.delete(users).where(eq(users.id, testUserId));
     } catch {}
     resetDb();

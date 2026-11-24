@@ -108,7 +108,6 @@ export class AuthService {
       );
     }
 
-    // Auditoria de sucesso somente após o commit da transação.
     try {
       await this.recordAudit({
         ...baseAudit,
@@ -119,8 +118,11 @@ export class AuthService {
         sessionId: result.sessionId,
       });
     } catch {
-      // Se a auditoria falhar, retorna erro 500 sem tentar revogar a sessão.
-      throw new AppError('AUTH_AUDIT_FAILED', 'Falha interna ao registrar auditoria.', 500);
+      throw new AppError(
+        'AUTH_AUDIT_FAILED',
+        'Falha interna ao registrar auditoria.',
+        500,
+      );
     }
 
     return {
@@ -136,7 +138,7 @@ export class AuthService {
   private async executeLoginTransaction(
     tx: LoginTx,
     input: LoginInput,
-    traceId: string,
+    _traceId: string,
   ): Promise<LoginTxResult> {
     const [user] = await tx
       .select()
@@ -153,7 +155,6 @@ export class AuthService {
     }
 
     if (user.status !== 'active') {
-      // Conta desabilitada: incrementa apenas se existir credencial associada.
       const [credential] = await tx
         .select()
         .from(userCredentials)
@@ -190,7 +191,6 @@ export class AuthService {
       .for('update');
 
     if (!credential) {
-      // Não existe registro em user_credentials: não há contador para incrementar.
       return {
         kind: 'failure',
         statusCode: 401,
@@ -211,10 +211,7 @@ export class AuthService {
       };
     }
 
-    const passwordValid = await verify(
-      credential.passwordHash,
-      input.password,
-    );
+    const passwordValid = await verify(credential.passwordHash, input.password);
 
     if (!passwordValid) {
       const newAttempts = credential.failedLoginAttempts + 1;

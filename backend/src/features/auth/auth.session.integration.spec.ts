@@ -35,12 +35,16 @@ integrationTests(
             eq(users.email, 'session.disabled@exemplo'),
             eq(users.email, 'session.logout@exemplo'),
             eq(users.email, 'session.logout2@exemplo'),
-          )
+          ),
         );
       for (const user of testUsers) {
-        await db.delete(userCredentials).where(eq(userCredentials.userId, user.id));
+        await db
+          .delete(userCredentials)
+          .where(eq(userCredentials.userId, user.id));
         await db.delete(userTokens).where(eq(userTokens.userId, user.id));
-        await db.delete(auditEvents).where(eq(auditEvents.actorUserId, user.id));
+        await db
+          .delete(auditEvents)
+          .where(eq(auditEvents.actorUserId, user.id));
         await db.delete(users).where(eq(users.id, user.id));
       }
     });
@@ -127,15 +131,6 @@ integrationTests(
 
     it('deve fazer logout e revogar sessão (C-08)', async () => {
       const db = getDb(dbUrl);
-      const [user] = await db
-        .insert(users)
-        .values({
-          email: 'session.logout@exemplo',
-          name: 'Session Logout User',
-          status: 'active',
-        })
-        .returning();
-
       const senhaCorreta = 'senha_logout_123';
       const senhaHash = await hash(senhaCorreta);
 
@@ -148,15 +143,12 @@ integrationTests(
         })
         .returning();
 
-      const [credential] = await db
-        .insert(userCredentials)
-        .values({
-          userId: createdUser.id,
-          passwordHash: senhaHash,
-          failedLoginAttempts: 0,
-          lockedUntil: null,
-        })
-        .returning();
+      await db.insert(userCredentials).values({
+        userId: createdUser.id,
+        passwordHash: senhaHash,
+        failedLoginAttempts: 0,
+        lockedUntil: null,
+      });
 
       const result = await service.login({
         email: 'session.logout2@exemplo',
@@ -166,10 +158,8 @@ integrationTests(
       expect(result.sessionSecret).toBeDefined();
       expect(result.sessionId).toBeDefined();
 
-      // Faz logout com o segredo da sessão
       await service.logout(result.sessionSecret);
 
-      // Verifica que a sessão foi revogada
       const session = await service.validateSession(result.sessionSecret);
       expect(session).toBeNull();
     });

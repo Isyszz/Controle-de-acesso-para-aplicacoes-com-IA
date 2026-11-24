@@ -2,8 +2,13 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { AuthService } from './auth.service.js';
 import { AuditService } from '../../features/audit/audit.service.js';
 import { getDb } from '../../infrastructure/database/index.js';
-import { auditEvents, users, userTokens, userCredentials } from '../../infrastructure/database/schema.js';
-import { and, eq, or } from 'drizzle-orm';
+import {
+  auditEvents,
+  users,
+  userTokens,
+  userCredentials,
+} from '../../infrastructure/database/schema.js';
+import { and, eq } from 'drizzle-orm';
 import { hash } from 'argon2';
 import { runWithTraceId } from '../../shared/trace/trace.context.js';
 
@@ -24,9 +29,13 @@ integrationTests(
         .from(users)
         .where(eq(users.email, 'audit.test@exemplo'));
       for (const user of testUsers) {
-        await db.delete(userCredentials).where(eq(userCredentials.userId, user.id));
+        await db
+          .delete(userCredentials)
+          .where(eq(userCredentials.userId, user.id));
         await db.delete(userTokens).where(eq(userTokens.userId, user.id));
-        await db.delete(auditEvents).where(eq(auditEvents.actorUserId, user.id));
+        await db
+          .delete(auditEvents)
+          .where(eq(auditEvents.actorUserId, user.id));
         await db.delete(users).where(eq(users.id, user.id));
       }
     });
@@ -53,23 +62,22 @@ integrationTests(
       });
 
       await runWithTraceId('trace-audit-login-success', () =>
-          service.login({
+        service.login({
           email: 'audit.test@exemplo',
           password: senhaCorreta,
-     }),
-);
+        }),
+      );
 
-      // Verifica se existe evento de login bem-sucedido no banco
       const [evento] = await db
         .select()
         .from(auditEvents)
         .where(
-           and(
-              eq(auditEvents.eventType, 'auth.login.succeeded'),
-              eq(auditEvents.decision, 'permitido'),
-              eq(auditEvents.actorUserId, user.id),
-            ),
-          )
+          and(
+            eq(auditEvents.eventType, 'auth.login.succeeded'),
+            eq(auditEvents.decision, 'permitido'),
+            eq(auditEvents.actorUserId, user.id),
+          ),
+        )
         .orderBy(auditEvents.occurredAt, { descending: true })
         .limit(1);
 
@@ -102,29 +110,25 @@ integrationTests(
         lockedUntil: null,
       });
 
-      // Tenta login com senha errada
       try {
-          await runWithTraceId('trace-audit-login-failed', () =>
+        await runWithTraceId('trace-audit-login-failed', () =>
           service.login({
-          email: 'audit.test@exemplo',
-          password: 'senha_errada',
-  }),
-);
-      } catch {
-        // Erro esperado
-      }
+            email: 'audit.test@exemplo',
+            password: 'senha_errada',
+          }),
+        );
+      } catch {}
 
-      // Verifica se existe evento de autorização negada
       const [evento] = await db
         .select()
         .from(auditEvents)
         .where(
           and(
-              eq(auditEvents.eventType, 'auth.login.failed'),
-              eq(auditEvents.decision, 'negado'),
-              eq(auditEvents.actorUserId, user.id),
-             ),
-         )
+            eq(auditEvents.eventType, 'auth.login.failed'),
+            eq(auditEvents.decision, 'negado'),
+            eq(auditEvents.actorUserId, user.id),
+          ),
+        )
         .orderBy(auditEvents.occurredAt, { descending: true })
         .limit(1);
 
@@ -156,27 +160,28 @@ integrationTests(
         lockedUntil: null,
       });
 
-      const result = await service.login({
-        email: 'audit.test@exemplo',
-        password: senhaCorreta,
-      });
-
+      const result = await runWithTraceId('trace-audit-logout', () =>
+        service.login({
+          email: 'audit.test@exemplo',
+          password: senhaCorreta,
+        }),
+      );
       expect(result.sessionSecret).toBeDefined();
 
-      // Faz logout
-      await service.logout(result.sessionSecret);
+      await runWithTraceId('trace-audit-logout', () =>
+        service.logout(result.sessionSecret),
+      );
 
-      // Verifica se existe evento de logout
       const [evento] = await db
         .select()
         .from(auditEvents)
         .where(
-           and(
-               eq(auditEvents.eventType, 'auth.logout'),
-               eq(auditEvents.decision, 'permitido'),
-               eq(auditEvents.actorUserId, user.id),
-              ),
-          )
+          and(
+            eq(auditEvents.eventType, 'auth.logout'),
+            eq(auditEvents.decision, 'permitido'),
+            eq(auditEvents.actorUserId, user.id),
+          ),
+        )
         .orderBy(auditEvents.occurredAt, { descending: true })
         .limit(1);
 

@@ -20,7 +20,6 @@ function asString(value: unknown): string | undefined {
   return String(value as string);
 }
 
-
 export function toAuditEvent(row: unknown): AuditEvent {
   const r = row as Record<string, unknown>;
 

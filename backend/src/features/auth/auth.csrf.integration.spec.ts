@@ -12,7 +12,6 @@ function computeCsrfToken(sessionId: string): string {
 
 describe('AuthController CSRF e Origin', () => {
   let controller: AuthController;
-  let mockAuthService: any;
 
   beforeEach(async () => {
     const mockAuthServiceInstance = {

@@ -33,12 +33,16 @@ integrationTests(
             eq(users.email, 'refresh.expired@exemplo'),
             eq(users.email, 'refresh.limit@exemplo'),
             eq(users.email, 'refresh.valid@exemplo'),
-          )
+          ),
         );
       for (const user of testUsers) {
-        await db.delete(userCredentials).where(eq(userCredentials.userId, user.id));
+        await db
+          .delete(userCredentials)
+          .where(eq(userCredentials.userId, user.id));
         await db.delete(userTokens).where(eq(userTokens.userId, user.id));
-        await db.delete(auditEvents).where(eq(auditEvents.actorUserId, user.id));
+        await db
+          .delete(auditEvents)
+          .where(eq(auditEvents.actorUserId, user.id));
         await db.delete(users).where(eq(users.id, user.id));
       }
     });
@@ -112,7 +116,6 @@ integrationTests(
         })
         .returning();
 
-      // Sessão com sessionStart de 9 horas atrás
       const nineHoursAgo = new Date(Date.now() - 9 * 60 * 60 * 1000);
       await db.insert(userTokens).values({
         userId: user.id,
@@ -150,7 +153,6 @@ integrationTests(
         lockedUntil: null,
       });
 
-      // Faz login para criar sessão
       const loginResult = await service.login({
         email: 'refresh.valid@exemplo',
         password: senhaCorreta,
@@ -159,18 +161,17 @@ integrationTests(
       expect(loginResult.sessionSecret).toBeDefined();
       expect(loginResult.sessionId).toBeDefined();
 
-      // Faz refresh com a sessão válida
       const refreshed = await service.refresh(loginResult.sessionSecret);
 
       expect(refreshed.sessionSecret).toBeDefined();
       expect(refreshed.csrfToken).toBeDefined();
       expect(refreshed.sessionSecret).not.toBe(loginResult.sessionSecret);
 
-      // Verifica que a sessão antiga foi revogada
-      const oldSession = await service.validateSession(loginResult.sessionSecret);
+      const oldSession = await service.validateSession(
+        loginResult.sessionSecret,
+      );
       expect(oldSession).toBeNull();
 
-      // Verifica que a nova sessão está ativa
       const newSession = await service.validateSession(refreshed.sessionSecret);
       expect(newSession).toBeDefined();
       expect(newSession.userId).toBe(user.id);

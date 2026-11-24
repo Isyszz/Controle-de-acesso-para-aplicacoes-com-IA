@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { AuthService } from './auth.service.js';
-import { AppError } from '../../shared/errors/app-error.js';
 import { AuditService } from '../../features/audit/audit.service.js';
 import { getDb } from '../../infrastructure/database/index.js';
 import {
@@ -31,13 +30,17 @@ integrationTests(
           or(
             eq(users.email, 'login.test@exemplo'),
             eq(users.email, 'login.disabled@exemplo'),
-            eq(users.email, 'login.locked@exemplo')
-          )
+            eq(users.email, 'login.locked@exemplo'),
+          ),
         );
       for (const user of testUsers) {
-        await db.delete(userCredentials).where(eq(userCredentials.userId, user.id));
+        await db
+          .delete(userCredentials)
+          .where(eq(userCredentials.userId, user.id));
         await db.delete(userTokens).where(eq(userTokens.userId, user.id));
-        await db.delete(auditEvents).where(eq(auditEvents.actorUserId, user.id));
+        await db
+          .delete(auditEvents)
+          .where(eq(auditEvents.actorUserId, user.id));
         await db.delete(users).where(eq(users.id, user.id));
       }
     });
