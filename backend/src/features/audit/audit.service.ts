@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { eq } from 'drizzle-orm';
+import { asc, eq } from 'drizzle-orm';
 import { AppLogger } from '../../shared/logging/logger.service.js';
 import {
   AuditEvent,
@@ -9,9 +9,42 @@ import {
 } from './audit.types.js';
 import { redactMetadata } from '../../shared/errors/sensitive-fields.js';
 import { getDb, resetDb } from '../../infrastructure/database/index.js';
+import type { DbExecutor } from '../../infrastructure/database/index.js';
 import { auditEvents } from '../../infrastructure/database/schema.js';
 
 const EVENTS_CAP = 10_000;
+
+type AuditEventRow = typeof auditEvents.$inferSelect;
+
+/**
+ * @internal Seam de teste: consulta eventos para aplicação do limite.
+ */
+export async function loadEventsForCap(
+  db: DbExecutor,
+): Promise<AuditEventRow[]> {
+  return await db
+    .select()
+    .from(auditEvents)
+    .orderBy(asc(auditEvents.occurredAt), asc(auditEvents.id));
+}
+
+/**
+ * @internal Seam de teste: remove somente o excedente do limite.
+ */
+export async function applyEventsCap(
+  db: DbExecutor,
+  rows: AuditEventRow[],
+  cap: number = EVENTS_CAP,
+): Promise<void> {
+  if (rows.length <= cap) {
+    return;
+  }
+
+  const excess = rows.length - cap;
+  for (const row of rows.slice(0, excess)) {
+    await db.delete(auditEvents).where(eq(auditEvents.id, row.id));
+  }
+}
 
 function asString(value: unknown): string | undefined {
   if (value === undefined || value === null) {
@@ -59,8 +92,8 @@ export function toAuditEvent(row: unknown): AuditEvent {
 export class AuditService implements AuditServicePort {
   private readonly logger = new AppLogger(AuditService.name);
 
-  async record(input: AuditEventInput): Promise<void> {
-    const db = getDb();
+  async record(input: AuditEventInput, executor?: DbExecutor): Promise<void> {
+    const db = executor ?? getDb();
 
     const event: AuditEvent = {
       id: crypto.randomUUID(),
@@ -102,16 +135,8 @@ export class AuditService implements AuditServicePort {
       metadata: event.metadata ? JSON.stringify(event.metadata) : null,
     });
 
-    const all = await db
-      .select()
-      .from(auditEvents)
-      .orderBy(auditEvents.occurredAt);
-    if (all.length >= EVENTS_CAP) {
-      const toDelete = all.slice(0, all.length - EVENTS_CAP + 1);
-      for (const row of toDelete) {
-        await db.delete(auditEvents).where(eq(auditEvents.id, String(row.id)));
-      }
-    }
+    const all = await loadEventsForCap(db);
+    await applyEventsCap(db, all);
 
     this.logger.log(
       `Audit: ${event.eventType} - ${event.decision} - ${event.reasonCode} - traceId=${event.traceId}`,

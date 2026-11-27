@@ -1,8 +1,24 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { AuditService, resetDb, toAuditEvent } from './audit.service.js';
+import { randomUUID } from 'crypto';
+import { and, eq, inArray } from 'drizzle-orm';
+import {
+  AuditService,
+  applyEventsCap,
+  loadEventsForCap,
+  resetDb,
+  toAuditEvent,
+} from './audit.service.js';
 import { getDb } from '../../infrastructure/database/index.js';
-import { auditEvents, users } from '../../infrastructure/database/schema.js';
-import { eq } from 'drizzle-orm';
+import {
+  auditEvents,
+  roles,
+  userRoles,
+  users,
+} from '../../infrastructure/database/schema.js';
+import {
+  RoleRepository,
+  UserRoleRepository,
+} from '../../infrastructure/database/repositories/role.repository.js';
 
 const TEST_TRACE_ID = 'trace-persist-001';
 
@@ -15,6 +31,24 @@ const createBaseInput = (actorUserId: string) => ({
   resourceType: 'session',
   decision: 'permitido' as const,
   reasonCode: 'CREDENTIALS_VALID',
+});
+
+const createTxInput = (actorUserId: string, traceId: string) => ({
+  ...createBaseInput(actorUserId),
+  traceId,
+  eventType: 'test.transaction',
+  action: 'test',
+  reasonCode: 'TEST_TRANSACTION',
+});
+
+const createCapRow = (traceId: string, occurredAt: Date, id?: string) => ({
+  ...(id ? { id } : {}),
+  traceId,
+  occurredAt,
+  eventType: 'test.cap',
+  action: 'test',
+  decision: 'permitido' as const,
+  reasonCode: 'CAP_TEST',
 });
 
 const dbUrl = process.env.DATABASE_URL_TEST;
@@ -308,5 +342,388 @@ integrationTests('AuditService (integração - requer DATABASE_URL_TEST)', () =>
     const events = await service.findByTraceIdAsync('trace-integration-001');
     expect(events.length).toBeGreaterThanOrEqual(1);
     expect(events[0].traceId).toBe('trace-integration-001');
+  });
+
+  it('deve registrar evento com executor transacional e reverter no rollback', async () => {
+    const service = new AuditService();
+    const db = getDb(dbUrl);
+    const traceId = `trace-tx-rollback-${randomUUID()}`;
+
+    try {
+      await expect(
+        db.transaction(async (tx) => {
+          await service.record(createTxInput(testUserId, traceId), tx);
+          throw new Error('rollback forçado');
+        }),
+      ).rejects.toThrow('rollback forçado');
+
+      const afterRollback = await db
+        .select()
+        .from(auditEvents)
+        .where(eq(auditEvents.traceId, traceId));
+
+      expect(afterRollback).toEqual([]);
+    } finally {
+      await db.delete(auditEvents).where(eq(auditEvents.traceId, traceId));
+    }
+  });
+
+  it('deve persistir associação e auditoria na mesma transação', async () => {
+    const service = new AuditService();
+    const userRoleRepo = new UserRoleRepository();
+    const roleRepo = new RoleRepository();
+    const db = getDb(dbUrl);
+    const traceId = `trace-tx-commit-${randomUUID()}`;
+    let roleId: string | undefined;
+
+    try {
+      const role = await roleRepo.create({
+        code: `audit_tx_commit_${randomUUID()}`,
+        name: 'Papel Tx Commit Teste',
+      });
+      roleId = role.id;
+
+      await db.transaction(async (tx) => {
+        await userRoleRepo.assign({ userId: testUserId, roleId: role.id }, tx);
+        await service.record(createTxInput(testUserId, traceId), tx);
+      });
+
+      const association = await db
+        .select()
+        .from(userRoles)
+        .where(
+          and(eq(userRoles.userId, testUserId), eq(userRoles.roleId, role.id)),
+        );
+      expect(association).toHaveLength(1);
+
+      const events = await db
+        .select()
+        .from(auditEvents)
+        .where(eq(auditEvents.traceId, traceId));
+      expect(events).toHaveLength(1);
+    } finally {
+      if (roleId) {
+        await db
+          .delete(userRoles)
+          .where(
+            and(eq(userRoles.userId, testUserId), eq(userRoles.roleId, roleId)),
+          );
+        await db.delete(roles).where(eq(roles.id, roleId));
+      }
+      await db.delete(auditEvents).where(eq(auditEvents.traceId, traceId));
+    }
+  });
+
+  it('deve reverter associação e auditoria quando a auditoria falha por FK', async () => {
+    const service = new AuditService();
+    const userRoleRepo = new UserRoleRepository();
+    const roleRepo = new RoleRepository();
+    const db = getDb(dbUrl);
+    const traceId = `trace-tx-fk-failure-${randomUUID()}`;
+    const absentUserId = randomUUID();
+    let roleId: string | undefined;
+
+    try {
+      const role = await roleRepo.create({
+        code: `audit_tx_fk_${randomUUID()}`,
+        name: 'Papel Tx FK Teste',
+      });
+      roleId = role.id;
+
+      await expect(
+        db.transaction(async (tx) => {
+          await userRoleRepo.assign(
+            { userId: testUserId, roleId: role.id },
+            tx,
+          );
+          await service.record(createTxInput(absentUserId, traceId), tx);
+        }),
+      ).rejects.toThrow();
+
+      const association = await db
+        .select()
+        .from(userRoles)
+        .where(
+          and(eq(userRoles.userId, testUserId), eq(userRoles.roleId, role.id)),
+        );
+      expect(association).toEqual([]);
+
+      const events = await db
+        .select()
+        .from(auditEvents)
+        .where(eq(auditEvents.traceId, traceId));
+      expect(events).toEqual([]);
+    } finally {
+      if (roleId) {
+        await db
+          .delete(userRoles)
+          .where(
+            and(eq(userRoles.userId, testUserId), eq(userRoles.roleId, roleId)),
+          );
+        await db.delete(roles).where(eq(roles.id, roleId));
+      }
+      await db.delete(auditEvents).where(eq(auditEvents.traceId, traceId));
+    }
+  });
+
+  it('applyEventsCap não deve excluir abaixo do limite', async () => {
+    const db = getDb(dbUrl);
+    const traceA = `trace-cap-below-${randomUUID()}`;
+    const traceIds = [traceA];
+
+    try {
+      await db
+        .insert(auditEvents)
+        .values([createCapRow(traceA, new Date('2026-02-01T00:00:00Z'))]);
+
+      const rows = (await loadEventsForCap(db)).filter((row) =>
+        traceIds.includes(row.traceId),
+      );
+      expect(rows).toHaveLength(1);
+
+      await applyEventsCap(db, rows, 2);
+
+      const remaining = await db
+        .select()
+        .from(auditEvents)
+        .where(inArray(auditEvents.traceId, traceIds));
+      expect(remaining).toHaveLength(1);
+      expect(remaining[0].traceId).toBe(traceA);
+    } finally {
+      await db
+        .delete(auditEvents)
+        .where(inArray(auditEvents.traceId, traceIds));
+    }
+  });
+
+  it('applyEventsCap não deve excluir exatamente no limite', async () => {
+    const db = getDb(dbUrl);
+    const traceA = `trace-cap-equal-a-${randomUUID()}`;
+    const traceB = `trace-cap-equal-b-${randomUUID()}`;
+    const traceIds = [traceA, traceB];
+
+    try {
+      await db
+        .insert(auditEvents)
+        .values([
+          createCapRow(traceA, new Date('2026-02-01T00:00:00Z')),
+          createCapRow(traceB, new Date('2026-02-02T00:00:00Z')),
+        ]);
+
+      const rows = (await loadEventsForCap(db)).filter((row) =>
+        traceIds.includes(row.traceId),
+      );
+      expect(rows).toHaveLength(2);
+
+      await applyEventsCap(db, rows, 2);
+
+      const remaining = await db
+        .select()
+        .from(auditEvents)
+        .where(inArray(auditEvents.traceId, traceIds));
+      expect(remaining).toHaveLength(2);
+      expect(remaining.map((row) => row.traceId).sort()).toEqual(
+        traceIds.slice().sort(),
+      );
+    } finally {
+      await db
+        .delete(auditEvents)
+        .where(inArray(auditEvents.traceId, traceIds));
+    }
+  });
+
+  it('applyEventsCap deve excluir somente o excedente acima do limite', async () => {
+    const db = getDb(dbUrl);
+    const traceA = `trace-cap-over-a-${randomUUID()}`;
+    const traceB = `trace-cap-over-b-${randomUUID()}`;
+    const traceC = `trace-cap-over-c-${randomUUID()}`;
+    const traceIds = [traceA, traceB, traceC];
+
+    try {
+      await db
+        .insert(auditEvents)
+        .values([
+          createCapRow(traceA, new Date('2026-02-01T00:00:00Z')),
+          createCapRow(traceB, new Date('2026-02-02T00:00:00Z')),
+          createCapRow(traceC, new Date('2026-02-03T00:00:00Z')),
+        ]);
+
+      const rows = (await loadEventsForCap(db)).filter((row) =>
+        traceIds.includes(row.traceId),
+      );
+      expect(rows.map((row) => row.traceId)).toEqual(traceIds);
+
+      await applyEventsCap(db, rows, 2);
+
+      const remaining = await db
+        .select()
+        .from(auditEvents)
+        .where(inArray(auditEvents.traceId, traceIds));
+      expect(remaining.map((row) => row.traceId).sort()).toEqual(
+        [traceB, traceC].sort(),
+      );
+      expect(remaining.some((row) => row.traceId === traceA)).toBe(false);
+    } finally {
+      await db
+        .delete(auditEvents)
+        .where(inArray(auditEvents.traceId, traceIds));
+    }
+  });
+
+  it('loadEventsForCap deve desempatar occurredAt igual por id', async () => {
+    const db = getDb(dbUrl);
+    const [idA, idB] = [randomUUID(), randomUUID()].sort();
+    const traceA = `trace-cap-tie-a-${randomUUID()}`;
+    const traceB = `trace-cap-tie-b-${randomUUID()}`;
+    const traceIds = [traceA, traceB];
+    const sameTime = new Date('2026-03-01T00:00:00Z');
+
+    try {
+      await db
+        .insert(auditEvents)
+        .values([
+          createCapRow(traceB, sameTime, idB),
+          createCapRow(traceA, sameTime, idA),
+        ]);
+
+      const rows = (await loadEventsForCap(db)).filter((row) =>
+        traceIds.includes(row.traceId),
+      );
+      expect(rows.map((row) => row.id)).toEqual([idA, idB]);
+
+      await applyEventsCap(db, rows, 1);
+
+      const remaining = await db
+        .select()
+        .from(auditEvents)
+        .where(inArray(auditEvents.traceId, traceIds));
+      expect(remaining.map((row) => row.traceId)).toEqual([traceB]);
+    } finally {
+      await db
+        .delete(auditEvents)
+        .where(inArray(auditEvents.traceId, traceIds));
+    }
+  });
+
+  it('applyEventsCap deve usar o executor transacional e ser revertido no rollback', async () => {
+    const db = getDb(dbUrl);
+    const trace1 = `trace-cap-tx-1-${randomUUID()}`;
+    const trace2 = `trace-cap-tx-2-${randomUUID()}`;
+    const trace3 = `trace-cap-tx-3-${randomUUID()}`;
+    const traceIds = [trace1, trace2, trace3];
+    const t1 = new Date('2026-04-01T00:00:00Z');
+    const t2 = new Date('2026-04-02T00:00:00Z');
+    const t3 = new Date('2026-04-03T00:00:00Z');
+
+    try {
+      await db
+        .insert(auditEvents)
+        .values([createCapRow(trace1, t1), createCapRow(trace2, t2)]);
+
+      const initial = await db
+        .select()
+        .from(auditEvents)
+        .where(inArray(auditEvents.traceId, [trace1, trace2]));
+      expect(initial).toHaveLength(2);
+
+      await expect(
+        db.transaction(async (tx) => {
+          await tx.insert(auditEvents).values(createCapRow(trace3, t3));
+
+          const scopedRows = (await loadEventsForCap(tx)).filter((row) =>
+            traceIds.includes(row.traceId),
+          );
+          expect(scopedRows.map((row) => row.traceId)).toEqual(traceIds);
+
+          await applyEventsCap(tx, scopedRows, 2);
+
+          const insideTx = await tx
+            .select()
+            .from(auditEvents)
+            .where(inArray(auditEvents.traceId, traceIds));
+          expect(insideTx.map((row) => row.traceId).sort()).toEqual(
+            [trace2, trace3].sort(),
+          );
+
+          const beforeRollback = await db
+            .select()
+            .from(auditEvents)
+            .where(inArray(auditEvents.traceId, traceIds));
+          expect(beforeRollback.map((row) => row.traceId).sort()).toEqual(
+            [trace1, trace2].sort(),
+          );
+
+          throw new Error('rollback forçado');
+        }),
+      ).rejects.toThrow('rollback forçado');
+
+      const afterRollback = await db
+        .select()
+        .from(auditEvents)
+        .where(inArray(auditEvents.traceId, traceIds));
+      expect(afterRollback.map((row) => row.traceId).sort()).toEqual(
+        [trace1, trace2].sort(),
+      );
+    } finally {
+      await db
+        .delete(auditEvents)
+        .where(inArray(auditEvents.traceId, traceIds));
+    }
+  });
+
+  it('applyEventsCap deve manter 10.000 eventos com o cap padrão de produção', async () => {
+    const db = getDb(dbUrl);
+    const traceId = `trace-cap-default-${randomUUID()}`;
+    const oldestId = randomUUID();
+    const newestId = randomUUID();
+    const total = 10_001;
+    const batchSize = 500;
+    const baseTime = new Date('2026-05-01T00:00:00Z').getTime();
+
+    try {
+      for (let start = 0; start < total; start += batchSize) {
+        const batch = Array.from(
+          { length: Math.min(batchSize, total - start) },
+          (_, offset) => {
+            const index = start + offset;
+            const id =
+              index === 0
+                ? oldestId
+                : index === total - 1
+                  ? newestId
+                  : undefined;
+
+            return createCapRow(traceId, new Date(baseTime + index), id);
+          },
+        );
+
+        await db.insert(auditEvents).values(batch);
+      }
+
+      const inserted = await db
+        .select({ id: auditEvents.id })
+        .from(auditEvents)
+        .where(eq(auditEvents.traceId, traceId));
+      expect(inserted).toHaveLength(total);
+
+      const rows = (await loadEventsForCap(db)).filter(
+        (row) => row.traceId === traceId,
+      );
+      expect(rows).toHaveLength(total);
+      expect(rows[0].id).toBe(oldestId);
+      expect(rows[total - 1].id).toBe(newestId);
+
+      await applyEventsCap(db, rows);
+
+      const remaining = await db
+        .select()
+        .from(auditEvents)
+        .where(eq(auditEvents.traceId, traceId));
+      expect(remaining).toHaveLength(10_000);
+      expect(remaining.some((row) => row.id === oldestId)).toBe(false);
+      expect(remaining.some((row) => row.id === newestId)).toBe(true);
+    } finally {
+      await db.delete(auditEvents).where(eq(auditEvents.traceId, traceId));
+    }
   });
 });

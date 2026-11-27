@@ -8,6 +8,7 @@ import {
   unique,
   foreignKey,
 } from 'drizzle-orm/pg-core';
+import type { AnyPgColumn } from 'drizzle-orm/pg-core';
 
 export const clients = pgTable(
   'clients',
@@ -104,7 +105,9 @@ export const roles = pgTable(
     id: uuid('id').primaryKey().defaultRandom(),
     code: text('code').notNull().unique(),
     name: text('name').notNull(),
-    inheritsFromRoleId: uuid('inherits_from_role_id'),
+    inheritsFromRoleId: uuid('inherits_from_role_id').references(
+      (): AnyPgColumn => roles.id,
+    ),
     createdAt: timestamp('created_at', { withTimezone: true })
       .defaultNow()
       .notNull(),

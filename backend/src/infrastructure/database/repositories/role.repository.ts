@@ -1,4 +1,5 @@
 import { getDb } from '../index.js';
+import type { DbExecutor } from '../index.js';
 import { roles, permissions, userRoles, rolePermissions } from '../schema.js';
 import { eq, and, inArray } from 'drizzle-orm';
 
@@ -67,8 +68,11 @@ export class PermissionRepository {
 }
 
 export class UserRoleRepository {
-  async assign(data: UserRoleInsert): Promise<UserRoleSelect> {
-    const db = getDb();
+  async assign(
+    data: UserRoleInsert,
+    executor?: DbExecutor,
+  ): Promise<UserRoleSelect> {
+    const db = executor ?? getDb();
     const [created] = await db.insert(userRoles).values(data).returning();
     return created;
   }
@@ -84,8 +88,9 @@ export class UserRoleRepository {
   async findByUserAndRole(
     userId: string,
     roleId: string,
+    executor?: DbExecutor,
   ): Promise<UserRoleSelect | null> {
-    const db = getDb();
+    const db = executor ?? getDb();
     const [found] = await db
       .select()
       .from(userRoles)
