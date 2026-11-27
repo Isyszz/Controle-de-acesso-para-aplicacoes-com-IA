@@ -1,12 +1,19 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { randomUUID } from 'crypto';
 import { resetDb, getDb } from '../index.js';
-import { UserRepository, CredentialRepository } from './user.repository.js';
+import type { Db, DbExecutor, DbTransaction } from '../index.js';
+import {
+  UserRepository,
+  CredentialRepository,
+  type UserSelect,
+} from './user.repository.js';
 import { SessionRepository } from './session.repository.js';
 import {
   RoleRepository,
   PermissionRepository,
   UserRoleRepository,
   RolePermissionRepository,
+  type RoleSelect,
 } from './role.repository.js';
 import {
   users,
@@ -17,7 +24,7 @@ import {
   userRoles,
   rolePermissions,
 } from '../schema.js';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 
 const dbUrl = process.env.DATABASE_URL_TEST;
 const integrationTests = dbUrl ? describe : describe.skip;
@@ -250,5 +257,121 @@ integrationTests('Repositórios (integração - requer DATABASE_URL_TEST)', () =
     await db.delete(rolePermissions).where(eq(rolePermissions.id, created.id));
     await db.delete(roles).where(eq(roles.id, role.id));
     await db.delete(permissions).where(eq(permissions.id, permission.id));
+  });
+
+  it('UserRoleRepository.assign deve usar o executor da transação', async () => {
+    const userRepo = new UserRepository();
+    const roleRepo = new RoleRepository();
+    const userRoleRepo = new UserRoleRepository();
+    const db = getDb(dbUrl);
+
+    let user: UserSelect | undefined;
+    let role: RoleSelect | undefined;
+
+    try {
+      user = await userRepo.create({
+        email: `repo-tx-assign-${randomUUID()}@example.com`,
+        name: 'Repo Tx Assign User',
+        status: 'active',
+      });
+      role = await roleRepo.create({
+        code: `repo_tx_assign_${randomUUID()}`,
+        name: 'Papel Tx Assign Teste',
+      });
+
+      const userId = user.id;
+      const roleId = role.id;
+
+      await expect(
+        db.transaction(async (tx) => {
+          await userRoleRepo.assign({ userId, roleId }, tx);
+          throw new Error('rollback forçado');
+        }),
+      ).rejects.toThrow('rollback forçado');
+
+      const afterRollback = await db
+        .select()
+        .from(userRoles)
+        .where(and(eq(userRoles.userId, userId), eq(userRoles.roleId, roleId)));
+
+      expect(afterRollback).toEqual([]);
+    } finally {
+      if (user) {
+        await db.delete(userRoles).where(eq(userRoles.userId, user.id));
+        await db.delete(users).where(eq(users.id, user.id));
+      }
+      if (role) {
+        await db.delete(roles).where(eq(roles.id, role.id));
+      }
+    }
+  });
+
+  it('UserRoleRepository.findByUserAndRole deve usar o executor da transação', async () => {
+    const userRepo = new UserRepository();
+    const roleRepo = new RoleRepository();
+    const userRoleRepo = new UserRoleRepository();
+    const db = getDb(dbUrl);
+
+    let user: UserSelect | undefined;
+    let role: RoleSelect | undefined;
+
+    try {
+      user = await userRepo.create({
+        email: `repo-tx-find-${randomUUID()}@example.com`,
+        name: 'Repo Tx Find User',
+        status: 'active',
+      });
+      role = await roleRepo.create({
+        code: `repo_tx_find_${randomUUID()}`,
+        name: 'Papel Tx Find Teste',
+      });
+
+      const userId = user.id;
+      const roleId = role.id;
+
+      await expect(
+        db.transaction(async (tx) => {
+          const created = await userRoleRepo.assign({ userId, roleId }, tx);
+          const found = await userRoleRepo.findByUserAndRole(
+            userId,
+            roleId,
+            tx,
+          );
+
+          expect(found).not.toBeNull();
+          expect(found?.id).toBe(created.id);
+
+          throw new Error('rollback forçado');
+        }),
+      ).rejects.toThrow('rollback forçado');
+
+      const afterRollback = await db
+        .select()
+        .from(userRoles)
+        .where(and(eq(userRoles.userId, userId), eq(userRoles.roleId, roleId)));
+
+      expect(afterRollback).toEqual([]);
+    } finally {
+      if (user) {
+        await db.delete(userRoles).where(eq(userRoles.userId, user.id));
+        await db.delete(users).where(eq(users.id, user.id));
+      }
+      if (role) {
+        await db.delete(roles).where(eq(roles.id, role.id));
+      }
+    }
+  });
+
+  it('Db e DbTransaction devem ser atribuíveis a DbExecutor', async () => {
+    type AssertDbExecutor<T extends DbExecutor> = T;
+
+    const db: Db = getDb(dbUrl);
+    const asExecutor: AssertDbExecutor<Db> = db;
+    expect(asExecutor).toBe(db);
+
+    await db.transaction(async (tx) => {
+      const transaction: AssertDbExecutor<DbTransaction> = tx;
+      expect(transaction).toBe(tx);
+    });
   });
 });

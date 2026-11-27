@@ -53,3 +53,10 @@ export function resetDb() {
 
 export { schema };
 export type Db = ReturnType<typeof getDb>;
+
+export type DbTransaction = Parameters<Parameters<Db['transaction']>[0]>[0];
+
+export type DbExecutor = Pick<
+  DbTransaction,
+  'select' | 'insert' | 'update' | 'delete'
+>;

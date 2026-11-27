@@ -1,3 +1,5 @@
+import type { DbExecutor } from '../../infrastructure/database/index.js';
+
 export type AuditDecision = 'permitido' | 'negado' | 'erro';
 
 export interface AuditEventInput {
@@ -39,7 +41,7 @@ export interface AuditEvent {
 }
 
 export interface AuditServicePort {
-  record(input: AuditEventInput): Promise<void>;
+  record(input: AuditEventInput, executor?: DbExecutor): Promise<void>;
   findByTraceIdAsync(traceId: string): Promise<AuditEvent[]>;
   findAllAsync(): Promise<AuditEvent[]>;
   getDecisionStats(): Promise<Record<AuditDecision, number>>;
